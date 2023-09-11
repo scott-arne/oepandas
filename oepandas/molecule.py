@@ -381,6 +381,9 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
     def __copy__(self):
         return self.copy()
 
+    def __hash__(self):
+        return hash(self.mols)
+
     def __setitem__(self, index, value):
         """
         Set an item in the array
@@ -430,9 +433,21 @@ class MoleculeDtype(PandasExtensionDtype):
         """
         return MoleculeArray
 
+    # Required
+    def __hash__(self) -> int:
+        return hash(str(self))
+
+    # Required
+    def __eq__(self, other: Any) -> bool:
+        if isinstance(other, str):
+            return self.name == other
+        return isinstance(other, type(self))
+
+    # Required
     def __str__(self):
         return self.name
 
+    # Required
     def __repr__(self):
         return self.__str__()
 
