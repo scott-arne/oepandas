@@ -2,7 +2,7 @@ import logging
 import sys
 import numpy as np
 import pandas as pd
-from typing import Callable, Literal, Any, TYPE_CHECKING
+from typing import Callable, Literal, Any
 from collections.abc import Iterable, Hashable, Sequence, Generator
 from pandas.core.ops import unpack_zerodim_and_defer
 from pandas.core.dtypes.dtypes import PandasExtensionDtype
@@ -11,10 +11,13 @@ from pandas.api.extensions import (
     ExtensionArray,
     ExtensionScalarOpsMixin,
     register_extension_dtype,
-    register_dataframe_accessor
+    register_dataframe_accessor,
+    register_series_accessor
 )
 from openeye import oechem
 from copy import copy as shallow_copy
+from .util import get_oeformat
+from .exception import UnsupportedFileFormat
 
 if sys.version_info >= (3, 11):
     from typing import Self  # pyright: ignore[reportUnusedImport]
@@ -89,15 +92,15 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
         if not issubclass(astype, oechem.OEMolBase):
             raise TypeError("Can only read molecules from string as an oechem.OEMolBase type")
 
-        if isinstance(fmt, str):
-            fmt = oechem.GetFileFormat(fmt)
+        # Standardize the format
+        fmt = get_oeformat(fmt)
 
         mols = []
         for i, s in enumerate(strings):
             mol = astype()
 
             if not oechem.OEReadMolFromString(mol, fmt, False, s.strip()):
-                log.warning("Could not convert molecule %d from %s: %s", i + 1, oechem.OEGetFormatString(fmt), s)
+                log.warning("Could not convert molecule %d from '%s': %s", i + 1, oechem.OEGetFormatString(fmt), s)
 
             mols.append(mol)
 
@@ -142,7 +145,7 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
     @staticmethod
     def _read_molecule_file(
             fp: FilePath,
-            file_format: int,
+            file_format: int | str,
             *,
             flavor: int | None = None,
             astype: type[oechem.OEMolBase] =
@@ -156,7 +159,7 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
         :return: Generator over molecules
         """
         with oechem.oemolistream(str(fp)) as ifs:
-            ifs.SetFormat(file_format)
+            ifs.SetFormat(get_oeformat(file_format))
 
             # Set flavor if requested
             if flavor is not None:
@@ -587,6 +590,97 @@ def read_oecsv(
 # Pandas DataFrame: Writers
 ########################################################################################################################
 
+@register_dataframe_accessor("to_sdf")
+class WriteToSDFAccessor:
+    """
+    Write to SD file
+    """
+
+    def __init__(self, pandas_obj):
+        self._obj = pandas_obj
+
+    def __call__(
+            self,
+            fp: FilePath,
+            primary_molecule_column,
+            *,
+            title_column: str | None = None,
+            columns: str | Iterable[str] | None = None,
+            index: bool = True,
+            index_tag: str = "index",
+            secondary_molecules_as: int | str = oechem.OEFormat_SMI
+    ) -> None:
+        """
+        Write DataFrame to an SD file
+        Note: Writing conformers not yet supported
+        :param primary_molecule_column: Primary molecule column
+        :param columns: Optional column(s) to include as SD tags
+        :param index: Write index
+        :param index_tag: SD tag for writing index
+        :param secondary_molecules_as: Encoding for secondary molecules (default: SMILES)
+        :return:
+        """
+        # Make sure we're working with a list of columns
+        if columns is None:
+            columns = list(self._obj.columns)
+        elif isinstance(columns, str):
+            columns = [columns]
+        else:
+            columns = list(columns)
+
+        # Validate primary molecule column
+        if primary_molecule_column not in self._obj.columns:
+            raise KeyError(f'Primary molecule column {primary_molecule_column} not found in DataFrame')
+        if not isinstance(self._obj[primary_molecule_column].dtype, MoleculeDtype):
+            raise TypeError(f'Primary molecule column {primary_molecule_column} is not a MoleculeDtype')
+
+        # Validate title column
+        if title_column is not None and title_column not in self._obj.columns:
+            raise KeyError(f'Title column {title_column} not found in DataFrame')
+
+        # Set of secondary molecule columns
+        secondary_molecule_cols = set()
+
+        for col in columns:
+            if col not in self._obj.columns:
+                raise KeyError(f'Column {col} not found in DataFrame')
+
+            if col != primary_molecule_column and isinstance(self._obj[col].dtype, MoleculeDtype):
+                secondary_molecule_cols.add(col)
+
+        # Get the secondary molecule format
+        secondary_fmt = secondary_molecules_as if isinstance(secondary_molecules_as, int) \
+            else oechem.GetFileFormat(secondary_molecules_as)
+
+        with oechem.oemolostream(str(fp)) as ofs:
+            for idx, row in self._obj.iterrows():
+                mol = row[primary_molecule_column].CreateCopy()
+
+                # Set the title
+                if title_column is not None:
+                    mol.SetTitle(str(row[title_column]))
+
+                for col in columns:
+
+                    # Secondary molecule column
+                    if col in secondary_molecule_cols:
+                        oechem.OESetSDData(
+                            mol,
+                            col,
+                            oechem.OEWriteMolToBytes(secondary_fmt, False, row[col]).decode("utf-8")
+                        )
+
+                    # Everything else
+                    else:
+                        oechem.OESetSDData(
+                            mol,
+                            col,
+                            str(row[col])
+                        )
+
+                # Write out the molecule
+                oechem.OEWriteMolecule(ofs, mol)
+
 # def to_sdf(
 #         self: pd.DataFrame,
 #         x):
@@ -652,25 +746,18 @@ class DataFrameAsMoleculeAccessor:
         # Convert the columns
         for col in columns:
 
-            if isinstance(fmt, dict):
-                col_fmt = fmt.get(col, oechem.OEFormat_SMI)
-            elif fmt is None:
+            # Column OEFormat
+            if fmt is None:
                 col_fmt = oechem.OEFormat_SMI
+            elif isinstance(fmt, dict):
+                col_fmt = get_oeformat(fmt.get(col, oechem.OEFormat_SMI))
             else:
-                col_fmt = fmt
-
-            strings = []
-            index = []
-
-            # TODO: Do I need to do this? If we process in-order then the indices just follow?
-            for idx, row in df.iterrows():
-                index.append(idx)
-                strings.append(row[col])
+                col_fmt = get_oeformat(fmt)
 
             # noinspection PyProtectedMember
-            array = MoleculeArray._from_sequence_of_strings(strings, astype=astype, fmt=col_fmt)
+            array = MoleculeArray._from_sequence_of_strings(df[col].array, astype=astype, fmt=col_fmt)
 
-            df[col] = pd.Series(array, index=index)
+            df[col] = pd.Series(array, index=self._obj.index)
 
         return df
 
@@ -715,12 +802,26 @@ class FilterInvalidMoleculesAccessor:
 # Pandas Series: Utilities
 ########################################################################################################################
 
-def series_as_molecule(
-        self: pd.Series,
-        *,
-        molformat: str = "smi",) -> pd.Series:
 
+@register_series_accessor("as_molecule")
+class SeriesAsMoleculeAccessor:
+    def __init__(self, pandas_obj):
+        self._obj = pandas_obj
 
-    series = pd.Series()
+    def __call__(
+            self,
+            *,
+            fmt: str | int = oechem.OEFormat_SMI,
+            astype=oechem.OEGraphMol):
+        """
+        Convert a series to molecules
+        :param fmt:
+        :param astype:
+        :return:
+        """
+        # Column OEFormat
+        col_fmt = get_oeformat(fmt)
 
-    return series
+        # noinspection PyProtectedMember
+        array = MoleculeArray._from_sequence_of_strings(self._obj, astype=astype, fmt=col_fmt)
+        return pd.Series(array, index=self._obj.index)
