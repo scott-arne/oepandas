@@ -2,6 +2,7 @@ import logging
 import sys
 import numpy as np
 import pandas as pd
+from pathlib import Path
 from typing import Callable, Literal, Any
 from collections.abc import Iterable, Hashable, Sequence, Generator
 from pandas.core.ops import unpack_zerodim_and_defer
@@ -16,7 +17,7 @@ from pandas.api.extensions import (
 )
 from openeye import oechem
 from copy import copy as shallow_copy
-from .util import get_oeformat
+from .util import get_oeformat, molecule_from_string, molecule_to_string
 from .exception import UnsupportedFileFormat
 
 if sys.version_info >= (3, 11):
@@ -25,7 +26,7 @@ else:
     from typing_extensions import Self  # pyright: ignore[reportUnusedImport]
 
 # noinspection PyProtectedMember
-from pandas._typing import Shape, FilePath, IndexLabel, ReadBuffer, HashableT, TakeIndexer
+from pandas._typing import Shape, FilePath, IndexLabel, ReadBuffer, HashableT, TakeIndexer, ArrayLike, FillnaOptions
 
 log = logging.getLogger("oepandas")
 
@@ -64,7 +65,8 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
         self.mols = np.array([mol.CreateCopy() if copy else mol for mol in mols])
 
     @classmethod
-    def _from_sequence(cls, scalars, *, dtype=None, copy=False) -> Self:
+    def _from_sequence(cls, scalars: Iterable[Any], *, dtype=None, copy=False,
+                       fmt: str | int = oechem.OEFormat_SMI) -> Self:
         """
         Iniitialize from a sequence of scalar values
         :param scalars: Scalars
@@ -72,6 +74,28 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
         :param copy: Copy the molecules (otherwise stores pointers)
         :return: New instance of Molecule Array
         """
+        mols = []
+        fmt = oechem.OEGetFormatString(fmt)
+
+        for i, obj in enumerate(scalars):
+
+            # Nones are OK
+            if obj is None:
+                mols.append(None)
+
+            # Molecule subclasses
+            elif isinstance(obj, oechem.OEMolBase):
+                mols.append(mol.CreateCopy() if copy else mol for mol in scalars)
+
+            elif isinstance(obj, (str, bytes)):
+                mol = oechem.OEGraphMol()
+                if not molecule_from_string(mol, obj, fmt):
+                    log.warning("Could not convert molecule %d from '%s' %s",
+                                i + 1, fmt.name, type(obj).__name__)
+
+            # Else who knows
+            else:
+                raise TypeError(f'Cannot create a molecule from {type(obj).__name__}')
         return cls([mol.CreateCopy() if copy else mol for mol in scalars])
 
     @classmethod
@@ -81,12 +105,14 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
             *,
             astype: type[oechem.OEMolBase] = oechem.OEGraphMol,
             copy: bool = False,
-            fmt: int = oechem.OEFormat_SMI) -> Self:
+            fmt: int = oechem.OEFormat_SMI,
+            b64=False) -> Self:
         """
         Read molecules form a sequence of strings
         :param strings: Sequence of strings
         :param astype: Data type for molecules (must be oechem.OEMolBase)
         :param copy: Not used (here for API compatibility)
+        :param b64: Gzipped or binary formats are b64 encoded
         :return:
         """
         if not issubclass(astype, oechem.OEMolBase):
@@ -96,11 +122,11 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
         fmt = get_oeformat(fmt)
 
         mols = []
-        for i, s in enumerate(strings):
+        for i, s in enumerate(strings):  # type: int, str
             mol = astype()
 
-            if not oechem.OEReadMolFromString(mol, fmt, False, s.strip()):
-                log.warning("Could not convert molecule %d from '%s': %s", i + 1, oechem.OEGetFormatString(fmt), s)
+            if not molecule_from_string(mol, s.strip(), fmt):
+                log.warning("Could not convert molecule %d from '%s': %s", i + 1, fmt.name, s)
 
             mols.append(mol)
 
@@ -109,6 +135,65 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
     @property
     def dtype(self) -> PandasExtensionDtype:
         return MoleculeDtype()
+
+    def fillna(
+        self,
+        value: object | ArrayLike | None = None,
+        method: FillnaOptions | None = None,
+        limit: int | None = None,
+        copy: bool = True,
+    ) -> Self:
+        """
+        Fill N/A values and invalid molecules
+        :param value: Fill value
+        :param method: Method (does not do anything here)
+        :param limit: Maximum number of entries to fill
+        :param copy: Whether to copy the data
+        :return: Filled extension array
+        """
+        # Sanity check
+        if limit is not None:
+            limit = max(0, limit)
+
+        # Data to fill
+        data = np.array([(obj.CreateCopy() if isinstance(obj, oechem.OEMolBase) else obj) for obj in self.mols]) \
+            if copy else self.mols
+
+        # Filled data
+        filled = []
+
+        for i, obj in enumerate(data):
+            # Termination condition with limit
+            if limit is not None and i >= limit:
+                filled.extend(data[i:])
+                break
+
+            # NaN evaluation
+            if pd.isna(obj):
+                filled.append(value)
+            elif isinstance(obj, oechem.OEMolBase):
+                filled.append((obj.CreateCopy() if copy else obj) if obj.IsValid() else value)
+            else:
+                raise TypeError(f'MoleculeArray cannot determine of object of type {type(obj).__name__} is Na')
+
+        return MoleculeArray(filled)
+
+    def dropna(self) -> Self:
+        """
+        Drop all NA and invalid molecules
+        :return: MoleculeArray with no missing or invalid molecules
+        """
+        non_missing = []
+        for obj in self.mols:
+            if not pd.isna(obj):
+                if isinstance(obj, oechem.OEMolBase):
+                    if obj.IsValid():
+                        non_missing.append(obj)
+                else:
+                    raise TypeError(f'MoleculeArray cannot determine of object of type {type(obj).__name__} is Na')
+
+        return MoleculeArray(non_missing)
+
 
     @property
     def shape(self) -> Shape:
@@ -158,12 +243,17 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
         :param astype: OpenEye molecule type to read (oechem.OEMolBase or oechem.OEGraphMol)
         :return: Generator over molecules
         """
+        fmt = get_oeformat(file_format)
+
         with oechem.oemolistream(str(fp)) as ifs:
-            ifs.SetFormat(get_oeformat(file_format))
+            ifs.SetFormat(fmt.oeformat)
 
             # Set flavor if requested
             if flavor is not None:
                 ifs.SetFlavor(file_format, flavor)
+
+            # Read gzipped formats
+            ifs.Setgz(fmt.gzip)
 
             iterator = ifs.GetOEMols if astype is oechem.OEMol else ifs.GetOEGraphMols
             for mol in iterator():
@@ -459,131 +549,133 @@ class MoleculeDtype(PandasExtensionDtype):
 # Pandas: Global Readers
 ########################################################################################################################
 
-def read_sdf(filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
-             *,
-             index_tag: IndexLabel | Literal[False] | None = None,
-             usecols: list[HashableT] | Callable[[Hashable], bool] = None,
-             skipmols: list[int] | int | Callable[[Hashable], bool] | None = None,
-             conf_test: str | oechem.OEConfTestBase | None = None,
-             astype=oechem.OEMol,
-             expand_confs=False,
-             include_first_conf_data=False,
-             flavor: int | None = None,
-             nmols: int | None = None) -> pd.DataFrame:
-    """
-    Read molecules from an SD file into a DataFrame
-
-    The conf_test parameter can either be a string or one of the OpenEye conformer testing types. Refer to the following
-    list to see the valid string values and the corresponding Openeye conformer testing type::
-
-        - isomeric: oechem.OEIsomericConfTest()
-        - absolute: oechem.OEAbsoluteConfTest()
-        - omega: oechem.OEOmegaConfTest()
-
-    :param filepath_or_buffer:
-    :param index_tag:
-    :param usecols:
-    :param skipmols:
-    :param flavor: Flavored input (OEIFlavor)
-    :param nmols:
-    :param conf_test: Optional testing strategy for conformers in the SD file
-    :return:
-    """
-    # Parse the conf test
-    if conf_test is not None:
-        if isinstance(conf_test, str):
-            if conf_test == "isomeric":
-                conf_test = oechem.OEIsomericConfTest()
-            elif conf_test == "absolute":
-                conf_test = oechem.OEAbsoluteConfTest()
-            elif conf_test == "omega":
-                conf_test = oechem.OEOmegaConfTest()
-            else:
-                raise KeyError(f'Invalid OpenEye conformer test type: {conf_test} (valid: isomeric, absolute, omega)')
-
-    if isinstance(filepath_or_buffer, FilePath):
-        with oechem.oemolistream(str(filepath_or_buffer)) as ifs:
-
-            # Check if SD file
-            if not ifs.GetFormat() == oechem.OEFormat_SDF:
-                raise FileError(f'{filepath_or_buffer} is not an SD file')
-
-            # Flavored I/O
-            if flavor is not None:
-                ifs.SetFlavor(oechem.OEFormat_SDF, flavor)
-
-            # Conformer testing
-            if conf_test is not None:
-                ifs.SetConfTest(conf_test)
-
-            # Iterate molecules
-            iterator = ifs.GetOEMols if astype is oechem.OEMol else ifs.GetOEGraphMols
-            for mol in iterator():
-                print(mol)
-
-    print(filepath_or_buffer)
-
-
-def read_oeb(
-        filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
-        *,
-        index_tag: IndexLabel | Literal[False] | None = None,
-        usecols: list[HashableT] | Callable[[Hashable], bool] = None,
-        skipmols: list[int] | int | Callable[[Hashable], bool] | None = None,
-        astype=oechem.OEMol,
-        expand_confs=False,
-        include_first_conf_data=False,
-        flavor: int | None = None,
-        nmols: int | None = None,
-        sd_data: bool = False) -> pd.DataFrame:
-    """
-
-    :param filepath_or_buffer:
-    :param index_tag:
-    :param usecols:
-    :param skipmols:
-    :param flavor: Flavored input (OEIFlavor)
-    :type flavor: int or None
-    :param nmols:
-    :param sd_data:
-    :return:
-    """
-    print(filepath_or_buffer)
-
-
-def read_oez(
-        filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
-        *,
-        index_field: IndexLabel | Literal[False] | None = None,
-        usecols: list[HashableT] | Callable[[Hashable], bool] = None,
-        skipmols: list[int] | int | Callable[[Hashable], bool] | None = None,
-        nmols: int | None = None) -> pd.DataFrame:
-    """
-
-    :param filepath_or_buffer:
-    :param index_field:
-    :param usecols:
-    :param skipmols:
-    :param nmols:
-    :return:
-    """
-    print(filepath_or_buffer)
-
-
-def read_oecsv(
-        filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
-        *,
-        index_col: IndexLabel | Literal[False] | None = None,
-        usecols: list[HashableT] | Callable[[Hashable], bool] = None,
-        skiprows: list[int] | int | Callable[[Hashable], bool] | None = None,
-        nrows: int | None = None) -> pd.DataFrame:
-    pass
-
-
-# pd.read_sdf = read_sdf
-# pd.read_oeb = read_oeb
-# pd.read_oez = read_oez
-# pd.read_oecsv = read_oecsv
+# def read_sdf(filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
+#              *,
+#              index_tag: IndexLabel | Literal[False] | None = None,
+#              usecols: list[HashableT] | Callable[[Hashable], bool] = None,
+#              skipmols: list[int] | int | Callable[[Hashable], bool] | None = None,
+#              conf_test: str | oechem.OEConfTestBase | None = None,
+#              astype=oechem.OEMol,
+#              expand_confs=False,
+#              include_first_conf_data=False,
+#              flavor: int | None = None,
+#              nmols: int | None = None) -> pd.DataFrame:
+#     """
+#     Read molecules from an SD file into a DataFrame
+#
+#     The conf_test parameter can either be a string or one of the OpenEye conformer testing types. Refer to the
+#     following list to see the valid string values and the corresponding Openeye conformer testing type::
+#
+#         - isomeric: oechem.OEIsomericConfTest()
+#         - absolute: oechem.OEAbsoluteConfTest()
+#         - omega: oechem.OEOmegaConfTest()
+#
+#     :param filepath_or_buffer:
+#     :param index_tag:
+#     :param usecols:
+#     :param skipmols:
+#     :param flavor: Flavored input (OEIFlavor)
+#     :param nmols:
+#     :param conf_test: Optional testing strategy for conformers in the SD file
+#     :return:
+#     """
+#     # Parse the conf test
+#     if conf_test is not None:
+#         if isinstance(conf_test, str):
+#             if conf_test == "isomeric":
+#                 conf_test = oechem.OEIsomericConfTest()
+#             elif conf_test == "absolute":
+#                 conf_test = oechem.OEAbsoluteConfTest()
+#             elif conf_test == "omega":
+#                 conf_test = oechem.OEOmegaConfTest()
+#             else:
+#                 raise KeyError(f'Invalid OpenEye conformer test type: {conf_test} (valid: isomeric, absolute, omega)')
+#
+#     if isinstance(filepath_or_buffer, FilePath):
+#
+#         fp = Path(filepath_or_buffer)
+#         fmt = get_oeformat(fp.suffix)
+#
+#         if not fmt.oeformat == oechem.OEFormat_SDF:
+#             raise FileError(f'{filepath_or_buffer} is not an SD file')
+#
+#         with oechem.oemolistream(str(filepath_or_buffer)) as ifs:
+#             # Flavored I/O
+#             if flavor is not None:
+#                 ifs.SetFlavor(oechem.OEFormat_SDF, flavor)
+#
+#             # Gzipped I/O
+#             ifs.Setgz(fmt.gzip)
+#
+#             # Conformer testing
+#             if conf_test is not None:
+#                 ifs.SetConfTest(conf_test)
+#
+#             # Iterate molecules
+#             iterator = ifs.GetOEMols if astype is oechem.OEMol else ifs.GetOEGraphMols
+#             for mol in iterator():
+#
+#                 print(mol)
+#     else:
+#         raise NotImplementedError("Only writing to files is currently implemented")
+#
+#     print(filepath_or_buffer)
+#
+#
+# def read_oeb(
+#         filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
+#         *,
+#         index_tag: IndexLabel | Literal[False] | None = None,
+#         usecols: list[HashableT] | Callable[[Hashable], bool] = None,
+#         skipmols: list[int] | int | Callable[[Hashable], bool] | None = None,
+#         astype=oechem.OEMol,
+#         expand_confs=False,
+#         include_first_conf_data=False,
+#         flavor: int | None = None,
+#         nmols: int | None = None,
+#         sd_data: bool = False) -> pd.DataFrame:
+#     """
+#
+#     :param filepath_or_buffer:
+#     :param index_tag:
+#     :param usecols:
+#     :param skipmols:
+#     :param flavor: Flavored input (OEIFlavor)
+#     :type flavor: int or None
+#     :param nmols:
+#     :param sd_data:
+#     :return:
+#     """
+#     print(filepath_or_buffer)
+#
+#
+# def read_oez(
+#         filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
+#         *,
+#         index_field: IndexLabel | Literal[False] | None = None,
+#         usecols: list[HashableT] | Callable[[Hashable], bool] = None,
+#         skipmols: list[int] | int | Callable[[Hashable], bool] | None = None,
+#         nmols: int | None = None) -> pd.DataFrame:
+#     """
+#
+#     :param filepath_or_buffer:
+#     :param index_field:
+#     :param usecols:
+#     :param skipmols:
+#     :param nmols:
+#     :return:
+#     """
+#     print(filepath_or_buffer)
+#
+#
+# def read_oecsv(
+#         filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
+#         *,
+#         index_col: IndexLabel | Literal[False] | None = None,
+#         usecols: list[HashableT] | Callable[[Hashable], bool] = None,
+#         skiprows: list[int] | int | Callable[[Hashable], bool] | None = None,
+#         nrows: int | None = None) -> pd.DataFrame:
+#     pass
 
 
 ########################################################################################################################
@@ -649,8 +741,7 @@ class WriteToSDFAccessor:
                 secondary_molecule_cols.add(col)
 
         # Get the secondary molecule format
-        secondary_fmt = secondary_molecules_as if isinstance(secondary_molecules_as, int) \
-            else oechem.GetFileFormat(secondary_molecules_as)
+        secondary_fmt = get_oeformat(secondary_molecules_as)
 
         with oechem.oemolostream(str(fp)) as ofs:
             for idx, row in self._obj.iterrows():
@@ -667,11 +758,11 @@ class WriteToSDFAccessor:
                         oechem.OESetSDData(
                             mol,
                             col,
-                            oechem.OEWriteMolToBytes(secondary_fmt, False, row[col]).decode("utf-8")
+                            molecule_to_string(row[col], secondary_fmt)
                         )
 
-                    # Everything else
-                    else:
+                    # Everything else (except our primary molecule column)
+                    elif col != primary_molecule_column:
                         oechem.OESetSDData(
                             mol,
                             col,
@@ -755,8 +846,7 @@ class DataFrameAsMoleculeAccessor:
                 col_fmt = get_oeformat(fmt)
 
             # noinspection PyProtectedMember
-            array = MoleculeArray._from_sequence_of_strings(df[col].array, astype=astype, fmt=col_fmt)
-
+            array = MoleculeArray._from_sequence_of_strings(df[col].array, astype=astype, fmt=col_fmt.oeformat)
             df[col] = pd.Series(array, index=self._obj.index)
 
         return df
@@ -820,8 +910,8 @@ class SeriesAsMoleculeAccessor:
         :return:
         """
         # Column OEFormat
-        col_fmt = get_oeformat(fmt)
+        _fmt = get_oeformat(fmt)
 
         # noinspection PyProtectedMember
-        array = MoleculeArray._from_sequence_of_strings(self._obj, astype=astype, fmt=col_fmt)
+        array = MoleculeArray._from_sequence_of_strings(self._obj, astype=astype, fmt=_fmt.oeformat)
         return pd.Series(array, index=self._obj.index)

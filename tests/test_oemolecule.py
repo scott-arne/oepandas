@@ -17,6 +17,9 @@ class TestMoleculeArray(unittest.TestCase):
             {"title": "butane", "smiles1": "CCCC", "smiles2": "CCCC"},
         ])
 
+        self.test_mol = oechem.OEGraphMol()
+        oechem.OESmilesToMol(self.test_mol, "CCCC")
+
     def test_from_sdf(self):
         """
         Read an SD file
@@ -88,3 +91,35 @@ class TestMoleculeArray(unittest.TestCase):
         """
         df = pd.read_excel(Path(ASSETS, "phenols.xlsx"))
         df.to_string()
+
+    def test_fillna_simple(self):
+        """
+        Fill all NA and invalid molecules with None
+        """
+        x = MoleculeArray([oechem.OEMol(), oechem.OEGraphMol(), self.test_mol.CreateCopy(), None])
+        y = x.fillna()
+
+        self.assertIsNone(y[0])
+        self.assertIsNone(y[1])
+        self.assertIsNotNone(y[2])
+        self.assertIsNone(y[3])
+
+    def test_fillna_limit(self):
+        """
+        Fill at most 1 NA / invalid molecules with None
+        """
+        x = MoleculeArray([oechem.OEMol(), oechem.OEGraphMol(), self.test_mol.CreateCopy(), None])
+        y = x.fillna(limit=1)
+
+        self.assertIsNone(y[0])
+        self.assertIsNotNone(y[1])
+        self.assertIsNotNone(y[2])
+        self.assertIsNone(y[3])
+
+    def test_dropna(self):
+        """
+        Drop NA and invalid molecules
+        """
+        x = MoleculeArray([oechem.OEMol(), oechem.OEGraphMol(), self.test_mol.CreateCopy(), None])
+        y = x.dropna()
+        self.assertEqual(1, len(y))
