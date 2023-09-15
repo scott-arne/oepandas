@@ -123,3 +123,11 @@ class TestMoleculeArray(unittest.TestCase):
         x = MoleculeArray([oechem.OEMol(), oechem.OEGraphMol(), self.test_mol.CreateCopy(), None])
         y = x.dropna()
         self.assertEqual(1, len(y))
+
+    def test_read_molecule_csv(self):
+        """
+        Read a CSV with molecules
+        """
+        # noinspection PyUnresolvedReferences
+        df = pd.read_molecule_csv(Path(ASSETS, "phenols_trunc.csv"), "Smiles")
+        self.assertTrue(all(isinstance(mol, oechem.OEMolBase) for mol in df.Smiles))

@@ -1,19 +1,32 @@
 import logging
 import sys
+import csv
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from typing import Callable, Literal, Any
+from typing import Callable, Literal, Any, Mapping, Hashable
 from collections.abc import Iterable, Hashable, Sequence, Generator
 from pandas.core.ops import unpack_zerodim_and_defer
 from pandas.core.dtypes.dtypes import PandasExtensionDtype
 from pandas.core.algorithms import take as pandas_take
+# noinspection PyProtectedMember
+from pandas.io.parsers.readers import _c_parser_defaults
+# noinspection PyProtectedMember
+from pandas._libs import lib
 from pandas.api.extensions import (
     ExtensionArray,
     ExtensionScalarOpsMixin,
     register_extension_dtype,
     register_dataframe_accessor,
     register_series_accessor
+)
+# noinspection PyProtectedMember
+from pandas._typing import (
+    CompressionOptions,
+    CSVEngine,
+    DtypeArg,
+    DtypeBackend,
+    StorageOptions,
 )
 from openeye import oechem
 from copy import copy as shallow_copy
@@ -676,6 +689,131 @@ class MoleculeDtype(PandasExtensionDtype):
 #         skiprows: list[int] | int | Callable[[Hashable], bool] | None = None,
 #         nrows: int | None = None) -> pd.DataFrame:
 #     pass
+
+def read_molecule_csv(
+    filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
+    mol_cols: str | dict[str, int] | dict[str, str],
+    *,
+    astype=oechem.OEGraphMol,
+    # pd.read_csv options here for type completion
+    sep: str | None | lib.NoDefault = lib.no_default,
+    delimiter: str | None | lib.NoDefault = None,
+    # Column and Index Locations and Names
+    header: int | Sequence[int] | None | Literal["infer"] = "infer",
+    names: Sequence[Hashable] | None | lib.NoDefault = lib.no_default,
+    index_col: IndexLabel | Literal[False] | None = None,
+    usecols: list[HashableT] | Callable[[Hashable], bool] | None = None,
+    # General Parsing Configuration
+    dtype: DtypeArg | None = None,
+    engine: CSVEngine | None = None,
+    converters: Mapping[Hashable, Callable] | None = None,
+    true_values: list | None = None,
+    false_values: list | None = None,
+    skipinitialspace: bool = False,
+    skiprows: list[int] | int | Callable[[Hashable], bool] | None = None,
+    skipfooter: int = 0,
+    nrows: int | None = None,
+    # NA and Missing Data Handling
+    na_values: Sequence[str] | Mapping[str, Sequence[str]] | None = None,
+    keep_default_na: bool = True,
+    na_filter: bool = True,
+    verbose: bool = False,
+    skip_blank_lines: bool = True,
+    # Datetime Handling
+    parse_dates: bool | Sequence[Hashable] | None = None,
+    infer_datetime_format: bool | lib.NoDefault = lib.no_default,
+    keep_date_col: bool = False,
+    date_parser: Callable | lib.NoDefault = lib.no_default,  # noqa
+    date_format: str | None = None,
+    dayfirst: bool = False,
+    cache_dates: bool = True,
+    # Iteration
+    iterator: bool = False,
+    chunksize: int | None = None,
+    # Quoting, Compression, and File Format
+    compression: CompressionOptions = "infer",
+    thousands: str | None = None,
+    decimal: str = ".",
+    lineterminator: str | None = None,
+    quotechar: str = '"',
+    quoting: int = csv.QUOTE_MINIMAL,
+    doublequote: bool = True,
+    escapechar: str | None = None,
+    comment: str | None = None,
+    encoding: str | None = None,
+    encoding_errors: str | None = "strict",
+    dialect: str | csv.Dialect | None = None,
+    # Error Handling
+    on_bad_lines: str = "error",
+    # Internal
+    delim_whitespace: bool = False,
+    low_memory: bool = _c_parser_defaults["low_memory"],
+    memory_map: bool = False,
+    float_precision: Literal["high", "legacy"] | None = None,
+    storage_options: StorageOptions | None = None,
+    dtype_backend: DtypeBackend | lib.NoDefault = lib.no_default
+) -> pd.DataFrame:
+    # Deletegate the CSV reading to pandas
+    # noinspection PyTypeChecker
+    df: pd.DataFrame = pd.read_csv(
+        filepath_or_buffer,
+        sep=sep,
+        delimiter=delimiter,
+        header=header,
+        names=names,
+        index_col=index_col,
+        usecols=usecols,
+        dtype=dtype,
+        engine=engine,
+        converters=converters,
+        true_values=true_values,
+        false_values=false_values,
+        skipinitialspace=skipinitialspace,
+        skiprows=skiprows,
+        skipfooter=skipfooter,
+        nrows=nrows,
+        na_values=na_values,
+        keep_default_na=keep_default_na,
+        na_filter=na_filter,
+        verbose=verbose,
+        skip_blank_lines=skip_blank_lines,
+        parse_dates=parse_dates,
+        infer_datetime_format=infer_datetime_format,
+        keep_date_col=keep_date_col,
+        date_parser=date_parser,
+        date_format=date_format,
+        dayfirst=dayfirst,
+        cache_dates=cache_dates,
+        iterator=iterator,
+        chunksize=chunksize,
+        compression=chunksize,
+        thousands=thousands,
+        decimal=decimal,
+        lineterminator=lineterminator,
+        quotechar=quotechar,
+        quoting=quoting,
+        doublequote=doublequote,
+        escapechar=escapechar,
+        comment=comment,
+        encoding=encoding,
+        encoding_errors=encoding_errors,
+        dialect=dialect,
+        on_bad_lines=on_bad_lines,
+        delim_whitespace=delim_whitespace,
+        low_memory=low_memory,
+        memory_map=memory_map,
+        float_precision=float_precision,
+        storage_options=storage_options,
+        dtype_backend=dtype_backend
+    )
+
+    # Convert molecule columns
+    df.as_molecule(mol_cols, astype=astype, inplace=True,)
+
+    return df
+
+# Monkey patch into Pandas
+pd.read_molecule_csv = read_molecule_csv
 
 
 ########################################################################################################################
