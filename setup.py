@@ -19,8 +19,8 @@ requirements = [
 ########################################################################################################################
 
 
-if sys.version_info < (3, 9):
-    sys.exit("Sorry, Python < 3.9 is not supported")
+if sys.version_info < (3, 10):
+    sys.exit("Sorry, Python < 3.10 is not supported")
 
 
 if "--requires" in sys.argv:

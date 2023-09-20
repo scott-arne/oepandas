@@ -4,7 +4,7 @@ import csv
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from typing import Callable, Literal, Any, Mapping, Hashable
+from typing import Callable, Literal, Any, Mapping
 from collections.abc import Iterable, Hashable, Sequence, Generator
 from pandas.core.ops import unpack_zerodim_and_defer
 from pandas.core.dtypes.dtypes import PandasExtensionDtype
@@ -31,7 +31,6 @@ from pandas._typing import (
 from openeye import oechem
 from copy import copy as shallow_copy
 from .util import get_oeformat, molecule_from_string, molecule_to_string
-from .exception import UnsupportedFileFormat
 
 if sys.version_info >= (3, 11):
     from typing import Self  # pyright: ignore[reportUnusedImport]
@@ -44,11 +43,40 @@ from pandas._typing import Shape, FilePath, IndexLabel, ReadBuffer, HashableT, T
 log = logging.getLogger("oepandas")
 
 
-class FileError(Exception):
+########################################################################################################################
+# Helpers
+########################################################################################################################
+
+def _read_molecule_file(
+        fp: FilePath,
+        file_format: int | str,
+        *,
+        flavor: int | None = None,
+        astype: type[oechem.OEMolBase] =
+        oechem.OEMol) -> Generator[oechem.OEMolBase, None, None]:
     """
-    File-related errors
+    Generator over flavored reading of molecules in a specific file format
+    :param fp: File path
+    :param file_format: File format (oechem.OEFormat)
+    :param flavor: Optional flavor (oechem.OEIFlavor)
+    :param astype: OpenEye molecule type to read (oechem.OEMolBase or oechem.OEGraphMol)
+    :return: Generator over molecules
     """
-    pass
+    fmt = get_oeformat(file_format)
+
+    with oechem.oemolistream(str(fp)) as ifs:
+        ifs.SetFormat(fmt.oeformat)
+
+        # Set flavor if requested
+        if flavor is not None:
+            ifs.SetFlavor(file_format, flavor)
+
+        # Read gzipped formats
+        ifs.Setgz(fmt.gzip)
+
+        iterator = ifs.GetOEMols if astype is oechem.OEMol else ifs.GetOEGraphMols
+        for mol in iterator():
+            yield mol.CreateCopy()
 
 
 ########################################################################################################################
@@ -207,7 +235,6 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
 
         return MoleculeArray(non_missing)
 
-
     @property
     def shape(self) -> Shape:
         return self.mols.shape
@@ -240,38 +267,6 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
     # I/O
     # --------------------------------------------------------
 
-    @staticmethod
-    def _read_molecule_file(
-            fp: FilePath,
-            file_format: int | str,
-            *,
-            flavor: int | None = None,
-            astype: type[oechem.OEMolBase] =
-            oechem.OEMol) -> Generator[oechem.OEMolBase, None, None]:
-        """
-        Generator over flavored reading of molecules in a specific file format
-        :param fp: File path
-        :param file_format: File format (oechem.OEFormat)
-        :param flavor: Optional flavor (oechem.OEIFlavor)
-        :param astype: OpenEye molecule type to read (oechem.OEMolBase or oechem.OEGraphMol)
-        :return: Generator over molecules
-        """
-        fmt = get_oeformat(file_format)
-
-        with oechem.oemolistream(str(fp)) as ifs:
-            ifs.SetFormat(fmt.oeformat)
-
-            # Set flavor if requested
-            if flavor is not None:
-                ifs.SetFlavor(file_format, flavor)
-
-            # Read gzipped formats
-            ifs.Setgz(fmt.gzip)
-
-            iterator = ifs.GetOEMols if astype is oechem.OEMol else ifs.GetOEGraphMols
-            for mol in iterator():
-                yield mol.CreateCopy()
-
     @classmethod
     def read_sdf(cls, fp, flavor=None, astype=oechem.OEMol) -> Self:
         """
@@ -281,7 +276,7 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
         :param astype: Type of molecule to read
         :return: Molecule array populated by the molecules in the file
         """
-        return cls(cls._read_molecule_file(fp, oechem.OEFormat_SDF, flavor=flavor, astype=astype))
+        return cls(_read_molecule_file(fp, oechem.OEFormat_SDF, flavor=flavor, astype=astype))
 
     @classmethod
     def read_oeb(cls, fp, flavor=None, astype=oechem.OEMol) -> Self:
@@ -292,7 +287,7 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
         :param astype: Type of molecule to read
         :return: Molecule array populated by the molecules in the file
         """
-        return cls(cls._read_molecule_file(fp, oechem.OEFormat_OEB, flavor=flavor, astype=astype))
+        return cls(_read_molecule_file(fp, oechem.OEFormat_OEB, flavor=flavor, astype=astype))
 
     @classmethod
     def read_smi(cls, fp, flavor=None, astype=oechem.OEMol) -> Self:
@@ -303,7 +298,7 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
         :param astype: Type of molecule to read
         :return: Molecule array populated by the molecules in the file
         """
-        return cls(cls._read_molecule_file(fp, oechem.OEFormat_SMI, flavor=flavor, astype=astype))
+        return cls(_read_molecule_file(fp, oechem.OEFormat_SMI, flavor=flavor, astype=astype))
 
     # TODO: from_oez?
 
@@ -753,6 +748,10 @@ def read_molecule_csv(
     storage_options: StorageOptions | None = None,
     dtype_backend: DtypeBackend | lib.NoDefault = lib.no_default
 ) -> pd.DataFrame:
+    """
+    Read a delimited text file with molecules. Note that this wraps the standard Pandas CSV reader and then converts
+    the molecule column(s).
+    """
     # Deletegate the CSV reading to pandas
     # noinspection PyTypeChecker
     df: pd.DataFrame = pd.read_csv(
@@ -786,7 +785,7 @@ def read_molecule_csv(
         cache_dates=cache_dates,
         iterator=iterator,
         chunksize=chunksize,
-        compression=chunksize,
+        compression=compression,
         thousands=thousands,
         decimal=decimal,
         lineterminator=lineterminator,
@@ -808,12 +807,75 @@ def read_molecule_csv(
     )
 
     # Convert molecule columns
-    df.as_molecule(mol_cols, astype=astype, inplace=True,)
+    df.as_molecule(mol_cols, astype=astype, inplace=True)
 
     return df
 
-# Monkey patch into Pandas
+
+def read_smi(
+    filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
+    *,
+    add_smiles: bool = False,
+    add_inchi_key: bool = False,
+    molecule_column: str = "Molecule",
+    title_column: str = "Title",
+    smiles_column: str = "SMILES",
+    inchi_key_column: str = "InChI Key",
+    astype=oechem.OEGraphMol
+) -> pd.DataFrame:
+    """
+    Read structures from a SMILES file to a dataframe
+    :param filepath_or_buffer: File path or buffer
+    :param add_smiles: Include a SMILES column in the dataframe (SMILES will be re-canonicalized)
+    :param add_inchi_key: Include an InChI key column in the dataframe
+    :param molecule_column: Name of the molecule column in the dataframe
+    :param title_column: Name of the column with molecule titles in the dataframe
+    :param smiles_column: Name of the SMILES column (if smiles is True)
+    :param inchi_key_column: Name of the InChI key column (if inchi_key is True)
+    :param astype: Type of OpenEye molecule to read
+    :return: Dataframe with molecules
+    """
+    if not isinstance(filepath_or_buffer, FilePath):
+        raise NotImplemented("Only reading from molecule paths is implemented")
+
+    data = []
+
+    # -----------------------------------
+    # Read a file
+    # -----------------------------------
+
+    fp = Path(filepath_or_buffer)
+
+    if not fp.exists():
+        raise FileNotFoundError(f'File does not exist: {fp}')
+
+    with oechem.oemolistream(str(fp)) as ifs:
+
+        # Structure iterator
+        iterator = ifs.GetOEGraphMols if astype is oechem.OEGraphMol else ifs.GetOEMols
+
+        for mol in iterator():
+            row_data = {title_column: mol.GetTitle(), molecule_column: mol.CreateCopy()}
+
+            # If adding smiles
+            if add_smiles:
+                row_data[smiles_column] = oechem.OEMolToSmiles(mol)
+
+            # If adding InChI keys
+            if add_inchi_key:
+                row_data[inchi_key_column] = oechem.OEMolToInChIKey(mol)
+
+            data.append(row_data)
+
+    # Create the dataframe and parse our molecule column
+    df = pd.DataFrame(data)
+    df.as_molecule(molecule_column, inplace=True)
+    return df
+
+
+# Monkey patch these into Pandas
 pd.read_molecule_csv = read_molecule_csv
+pd.read_smi = read_smi
 
 
 ########################################################################################################################
@@ -975,17 +1037,37 @@ class DataFrameAsMoleculeAccessor:
         # Convert the columns
         for col in columns:
 
-            # Column OEFormat
-            if fmt is None:
-                col_fmt = oechem.OEFormat_SMI
-            elif isinstance(fmt, dict):
-                col_fmt = get_oeformat(fmt.get(col, oechem.OEFormat_SMI))
-            else:
-                col_fmt = get_oeformat(fmt)
+            # Get the underlying array
+            arr = self._obj[col].array
 
-            # noinspection PyProtectedMember
-            array = MoleculeArray._from_sequence_of_strings(df[col].array, astype=astype, fmt=col_fmt.oeformat)
-            df[col] = pd.Series(array, index=self._obj.index)
+            # Peek at the first non-null value and see if it looks like an OpenEye object
+            _type = None
+            for obj in arr:
+                if not pd.isna(obj):
+                    _type = type(obj)
+                    break
+
+            # If we have strings then use the optimized parser for sequences of strings
+            if issubclass(_type, str):
+
+                # File format of the column (as an OEFormat)
+                if fmt is None:
+                    col_fmt = oechem.OEFormat_SMI
+                elif isinstance(fmt, dict):
+                    col_fmt = get_oeformat(fmt.get(col, oechem.OEFormat_SMI))
+                else:
+                    col_fmt = get_oeformat(fmt)
+
+                # noinspection PyProtectedMember
+                mol_array = MoleculeArray._from_sequence_of_strings(arr, astype=astype, fmt=col_fmt.oeformat)
+
+            # Otherwise use the more general sequence parser
+            else:
+                # noinspection PyProtectedMember
+                mol_array = MoleculeArray._from_sequence(arr)
+
+            # Replace the column
+            df[col] = pd.Series(mol_array, index=self._obj.index)
 
         return df
 
