@@ -806,8 +806,9 @@ def read_molecule_csv(
         dtype_backend=dtype_backend
     )
 
-    # Convert molecule columns
-    df.as_molecule(mol_cols, astype=astype, inplace=True)
+    # Convert molecule columns if we have data
+    if len(df) > 0:
+        df.as_molecule(mol_cols, astype=astype, inplace=True)
 
     return df
 
@@ -815,6 +816,8 @@ def read_molecule_csv(
 def read_smi(
     filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
     *,
+    cx: bool = False,
+    flavor: int | None = None,
     add_smiles: bool = False,
     add_inchi_key: bool = False,
     molecule_column: str = "Molecule",
@@ -826,6 +829,8 @@ def read_smi(
     """
     Read structures from a SMILES file to a dataframe
     :param filepath_or_buffer: File path or buffer
+    :param cx: Read CX SMILES format (versus default SMILES)
+    :param flavor: SMILES flavor (part of oechem.OEIFlavor namespace)
     :param add_smiles: Include a SMILES column in the dataframe (SMILES will be re-canonicalized)
     :param add_inchi_key: Include an InChI key column in the dataframe
     :param molecule_column: Name of the molecule column in the dataframe
@@ -835,10 +840,19 @@ def read_smi(
     :param astype: Type of OpenEye molecule to read
     :return: Dataframe with molecules
     """
-    if not isinstance(filepath_or_buffer, FilePath):
+    if not isinstance(filepath_or_buffer, (Path, str)):
         raise NotImplemented("Only reading from molecule paths is implemented")
 
     data = []
+
+    # Configure the column headers and order
+    columns = [title_column, molecule_column]
+
+    if add_smiles:
+        columns.append(smiles_column)
+
+    if add_inchi_key:
+        columns.append(inchi_key_column)
 
     # -----------------------------------
     # Read a file
@@ -849,27 +863,30 @@ def read_smi(
     if not fp.exists():
         raise FileNotFoundError(f'File does not exist: {fp}')
 
-    with oechem.oemolistream(str(fp)) as ifs:
+    for mol in _read_molecule_file(
+            filepath_or_buffer,
+            file_format=oechem.OEFormat_CXSMILES if cx else oechem.OEFormat_SMI,
+            flavor=flavor,
+            astype=astype
+    ):
+        row_data = {title_column: mol.GetTitle(), molecule_column: mol.CreateCopy()}
 
-        # Structure iterator
-        iterator = ifs.GetOEGraphMols if astype is oechem.OEGraphMol else ifs.GetOEMols
+        # If adding smiles
+        if add_smiles:
+            row_data[smiles_column] = oechem.OEMolToSmiles(mol)
 
-        for mol in iterator():
-            row_data = {title_column: mol.GetTitle(), molecule_column: mol.CreateCopy()}
+        # If adding InChI keys
+        if add_inchi_key:
+            row_data[inchi_key_column] = oechem.OEMolToInChIKey(mol)
 
-            # If adding smiles
-            if add_smiles:
-                row_data[smiles_column] = oechem.OEMolToSmiles(mol)
+        data.append(row_data)
 
-            # If adding InChI keys
-            if add_inchi_key:
-                row_data[inchi_key_column] = oechem.OEMolToInChIKey(mol)
+    df = pd.DataFrame(data, columns=columns)
 
-            data.append(row_data)
+    # Convert only if the dataframe is not empty
+    if len(df) > 0:
+        df.as_molecule(molecule_column, inplace=True)
 
-    # Create the dataframe and parse our molecule column
-    df = pd.DataFrame(data)
-    df.as_molecule(molecule_column, inplace=True)
     return df
 
 

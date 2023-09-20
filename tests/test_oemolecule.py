@@ -131,3 +131,12 @@ class TestMoleculeArray(unittest.TestCase):
         # noinspection PyUnresolvedReferences
         df = pd.read_molecule_csv(Path(ASSETS, "phenols_trunc.csv"), "Smiles")
         self.assertTrue(all(isinstance(mol, oechem.OEMolBase) for mol in df.Smiles))
+
+    def test_read_smi(self):
+        """
+        Read a SMILES file into a DataFrame
+        """
+        # noinspection PyUnresolvedReferences
+        df = pd.read_smi(Path(ASSETS, "10.smi"))
+        self.assertEqual(10, len(df))
+        self.assertTrue(all(isinstance(mol, oechem.OEMolBase) for mol in df.Molecule))
