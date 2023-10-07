@@ -26,7 +26,7 @@ from pandas._typing import (
     CSVEngine,
     DtypeArg,
     DtypeBackend,
-    StorageOptions,
+    StorageOptions, npt,
 )
 from openeye import oechem
 from copy import copy as shallow_copy
@@ -166,7 +166,7 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
         for i, s in enumerate(strings):  # type: int, str
             mol = astype()
 
-            if not molecule_from_string(mol, s.strip(), fmt):
+            if not (isinstance(s, str) and molecule_from_string(mol, s.strip(), fmt)):
                 log.warning("Could not convert molecule %d from '%s': %s", i + 1, fmt.name, s)
 
             mols.append(mol)
@@ -225,6 +225,7 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
         :return: MoleculeArray with no missing or invalid molecules
         """
         non_missing = []
+
         for obj in self.mols:
             if not pd.isna(obj):
                 if isinstance(obj, oechem.OEMolBase):
@@ -1112,18 +1113,16 @@ class FilterInvalidMoleculesAccessor:
             if name not in self._obj.columns:
                 raise KeyError(f'Column {name} not found in DataFrame: {", ".join(self._obj.columns)}')
 
-        # Whether we are working inplace or on a copy
-        df = self._obj if inplace else self._obj.copy()
-
         # Compute a bitmask of rows that we want to keep over all the columns
-        mask = np.array([True] * len(df))
+        mask = np.array([True] * len(self._obj))
         for col in columns:
-            mask &= df[col].array.valid()
+            mask &= self._obj[col].array.valid()
 
-        # We copy the DataFrame so that we're not operating on a view (truly filtering out the values)
-        df = pd.DataFrame(df[mask])
+        if inplace:
+            self._obj.drop(self._obj[~mask].index, inplace=True)
+            return self._obj
 
-        return df
+        return self._obj.drop(self._obj[~mask].index)
 
 ########################################################################################################################
 # Pandas Series: Utilities
