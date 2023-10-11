@@ -1,5 +1,7 @@
 import unittest
+import numpy as np
 import pandas as pd
+import oepandas as oepd
 from oepandas import MoleculeArray, MoleculeDtype
 from pathlib import Path
 from openeye import oechem
@@ -135,6 +137,39 @@ class TestMoleculeArray(unittest.TestCase):
         df = pd.read_molecule_csv(Path(ASSETS, "phenols_trunc.csv"), "Smiles")
         self.assertTrue(all(isinstance(mol, oechem.OEMolBase) for mol in df.Smiles))
 
+    def test_pandas_readers_monkeypatch(self):
+        """
+        Readers are monkeypatched
+        """
+        self.assertTrue(hasattr(pd, "read_molecule_csv"))
+        self.assertTrue(hasattr(pd, "read_smi"))
+        self.assertTrue(hasattr(pd, "read_sdf"))
+
+    def test_read_molecule_csv_add_smiles(self):
+        """
+        Adding SMILES columns in different ways when reading a molecule CSV
+        """
+        with self.subTest("add_smiles=True"):
+            df = oepd.read_molecule_csv(Path(ASSETS, "phenols_trunc.csv"), "Smiles", add_smiles=True)
+            self.assertIn("Smiles SMILES", df.columns)
+            self.assertTrue(all(isinstance(x, str) for x in df["Smiles SMILES"]))
+
+        with self.subTest("add_smiles='Smiles'"):
+            df = oepd.read_molecule_csv(Path(ASSETS, "phenols_trunc.csv"), "Smiles", add_smiles="Smiles")
+            self.assertIn("Smiles SMILES", df.columns)
+            self.assertTrue(all(isinstance(x, str) for x in df["Smiles SMILES"]))
+
+        with self.subTest("add_smiles=['Smiles']"):
+            df = oepd.read_molecule_csv(Path(ASSETS, "phenols_trunc.csv"), "Smiles", add_smiles=["Smiles"])
+            self.assertIn("Smiles SMILES", df.columns)
+            self.assertTrue(all(isinstance(x, str) for x in df["Smiles SMILES"]))
+
+        with self.subTest("add_smiles={'Smiles': 'Testy McTesterson'}"):
+            df = oepd.read_molecule_csv(Path(ASSETS, "phenols_trunc.csv"), "Smiles",
+                                        add_smiles={"Smiles": "Testy McTesterson"})
+            self.assertIn("Testy McTesterson", df.columns)
+            self.assertTrue(all(isinstance(x, str) for x in df["Testy McTesterson"]))
+
     def test_read_smi(self):
         """
         Read a SMILES file into a DataFrame
@@ -143,3 +178,99 @@ class TestMoleculeArray(unittest.TestCase):
         df = pd.read_smi(Path(ASSETS, "10.smi"))
         self.assertEqual(10, len(df))
         self.assertTrue(all(isinstance(mol, oechem.OEMolBase) for mol in df.Molecule))
+
+    def test_read_sdf(self):
+        """
+        Read an SD file with data
+        """
+        with self.subTest("Read all data as strings (i.e., object)"):
+            df = oepd.read_sdf(Path(ASSETS, "10-tagged.sdf"))
+
+            # Check the datatypes
+            for col in df.columns:
+                if col == "Molecule":
+                    self.assertTrue(isinstance(df.dtypes[col], MoleculeDtype))
+                else:
+                    self.assertTrue(isinstance(df.dtypes[col], object))
+
+        with self.subTest("Read a single column"):
+            df = oepd.read_sdf(
+                Path(ASSETS, "10-tagged.sdf"),
+                usecols="Integer Tag"
+            )
+
+            self.assertIn("Integer Tag", df.columns)
+            self.assertNotIn("Float Tag", df.columns)
+            self.assertNotIn("String Tag", df.columns)
+
+        with self.subTest("Read a single column and cast it to an integer"):
+            df = oepd.read_sdf(
+                Path(ASSETS, "10-tagged.sdf"),
+                usecols="Integer Tag",
+                numeric={"Integer Tag": "unsigned"}
+            )
+
+            self.assertIn("Integer Tag", df.columns)
+            self.assertNotIn("Float Tag", df.columns)
+            self.assertNotIn("String Tag", df.columns)
+
+            # Check the dtype
+            self.assertEqual(str(df.dtypes["Integer Tag"]), "uint8")
+
+        with self.subTest("Cast multiple numeric columns data"):
+            df = oepd.read_sdf(
+                Path(ASSETS, "10-tagged.sdf"),
+                numeric={"Integer Tag": "unsigned", "Float Tag": "float"}
+            )
+
+            self.assertIn("Integer Tag", df.columns)
+            self.assertIn("Float Tag", df.columns)
+            self.assertIn("String Tag", df.columns)
+
+            # Check the dtype
+            self.assertEqual(str(df.dtypes["Integer Tag"]), "uint8")
+            self.assertEqual(str(df.dtypes["Float Tag"]), "float32")
+
+
+    def test_to_smiles(self):
+        """
+        Convert to a SMILES array
+        """
+        arr = MoleculeArray.read_smi(Path(ASSETS, "10.smi"))
+        arr.append(oechem.OEMol())
+
+        expected = [
+            'CC(=O)Oc1ccccc1C(=O)O',
+            'CC(C)Cc1ccc(cc1)C(C)C(=O)O',
+            'CC(=O)Nc1ccc(cc1)O',
+            'Cn1cnc2c1c(=O)n(c(=O)n2C)C',
+            'CN1c2ccc(cc2C(=NCC1=O)c3ccccc3)Cl',
+            'Cc1c(c(c(c(n1)C(C)C)C(C)C)C(=O)NCCc2ccc(cc2)OC)c3ccccc3',
+            'CN(C)C(=O)N(c1ccccc1)c2ccc(cc2)Cl',
+            'CC(C)Cc1ccc(cc1)OC2=CC(=O)c3c(cccc3O)C2=O',
+            'Cc1cn(c(=O)o1)[C@@H]2C[C@@H](c3[nH]c4cccc(c4n3)S2(=O)=O)c5ccccc5',
+            'CN(C)C1CC[C@H]2C=CC(=C[C@@]2(C1)O)Cl',
+            None
+        ]
+
+        self.assertListEqual(expected, arr.to_smiles().tolist())
+
+    def test_series_to_smiles(self):
+        """
+        Convert a series to SMILES
+        """
+        x = MoleculeArray.read_smi(Path(ASSETS, "10.smi"))
+        df = pd.DataFrame([
+            {"Title": x[0].GetTitle(), "MOL": x[0]},
+            {"Title": "Invalid", "MOL": oechem.OEMol()},
+            {"Title": x[1].GetTitle(), "MOL": x[1]},
+        ])
+        df["MOL"] = df.MOL.astype(MoleculeDtype())
+
+        expected = [
+            "CC(=O)Oc1ccccc1C(=O)O",
+            None,
+            "CC(C)Cc1ccc(cc1)C(C)C(=O)O"
+        ]
+
+        self.assertListEqual(expected, df.MOL.to_smiles().tolist())

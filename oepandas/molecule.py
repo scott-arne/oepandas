@@ -24,9 +24,10 @@ from pandas.api.extensions import (
 from pandas._typing import (
     CompressionOptions,
     CSVEngine,
+    Dtype,
     DtypeArg,
     DtypeBackend,
-    StorageOptions, npt,
+    StorageOptions,
 )
 from openeye import oechem
 from copy import copy as shallow_copy
@@ -269,7 +270,7 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
     # --------------------------------------------------------
 
     @classmethod
-    def read_sdf(cls, fp, flavor=None, astype=oechem.OEMol) -> Self:
+    def read_sdf(cls, fp, flavor=None, astype: type[oechem.OEMolBase] = oechem.OEMol) -> Self:
         """
         Read molecules from an SD file and return an array
         :param fp: Path to the SD file
@@ -280,7 +281,7 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
         return cls(_read_molecule_file(fp, oechem.OEFormat_SDF, flavor=flavor, astype=astype))
 
     @classmethod
-    def read_oeb(cls, fp, flavor=None, astype=oechem.OEMol) -> Self:
+    def read_oeb(cls, fp, flavor=None, astype: type[oechem.OEMolBase] = oechem.OEMol) -> Self:
         """
         Read molecules from an OEB file and return an array
         :param fp: Path to the OEB file
@@ -291,7 +292,7 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
         return cls(_read_molecule_file(fp, oechem.OEFormat_OEB, flavor=flavor, astype=astype))
 
     @classmethod
-    def read_smi(cls, fp, flavor=None, astype=oechem.OEMol) -> Self:
+    def read_smi(cls, fp, flavor=None, astype: type[oechem.OEMolBase] = oechem.OEMol) -> Self:
         """
         Read molecules from an SMILES file and return an array
         :param fp: Path to the SMILES file
@@ -371,6 +372,23 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
         :return: Boolean array
         """
         return np.array([mol.IsValid() for mol in self.mols])
+
+    # --------------------------------------------------------
+    # Conversions
+    # --------------------------------------------------------
+
+    def to_smiles(self, flavor=oechem.OESMILESFlag_ISOMERIC):
+        """
+        Convert array to SMILES
+        :return:
+        """
+        smiles = []
+        for mol in self.mols:
+            if mol is not None and mol.IsValid():
+                smiles.append(oechem.OECreateSmiString(mol, flavor))
+            else:
+                smiles.append(None)
+        return np.array(smiles, dtype=object)
 
     # --------------------------------------------------------
     # Operators
@@ -558,6 +576,86 @@ class MoleculeDtype(PandasExtensionDtype):
 # Pandas: Global Readers
 ########################################################################################################################
 
+def _add_smiles_columns(
+        df: pd.DataFrame,
+        molecule_columns: str | Iterable[str] | dict[str, int] | dict[str, str],
+        add_smiles: bool | str | Iterable[str] | dict[str, str]):
+    """
+    Helper function to add SMILES column(s) to a DataFrame.
+
+    The add_smiles parameter can be a number of things:
+    - bool => Add SMILES for the first molecule column
+    - str => Add SMILES for a specific molecule column
+    - Iterable[str] => Add SMILES for one or more molecule columns
+    - dict[str, str] => Add SMILES for one or more molecule columns with custom column names
+
+    :param df: Dataframe to add SMILES columns to
+    :param molecule_columns: Column(s) that the user requested
+    :param add_smiles: Column definition(s) for adding SMILES
+    """
+    # Map of molecule column -> SMILES column
+    add_smiles_map = {}
+
+    if not isinstance(add_smiles, dict):
+
+        if isinstance(add_smiles, bool) and add_smiles:
+            # We only add SMILES to the first molecule column with the suffix " SMILES"
+            col = molecule_columns if isinstance(molecule_columns, str) else next(iter(molecule_columns))
+            add_smiles_map[col] = f'{col} SMILES'
+
+        elif isinstance(add_smiles, str):
+            if add_smiles in df.columns:
+                if isinstance(df.dtypes[add_smiles], MoleculeDtype):
+                    add_smiles_map[add_smiles] = f'{add_smiles} SMILES'
+                else:
+                    log.warning(f'Column {add_smiles} is not a MoleculeDtype')
+            else:
+                log.warning(f'Column {add_smiles} not found in DataFrame')
+
+        elif isinstance(add_smiles, Iterable):
+            for col in add_smiles:
+                if col in df.columns:
+                    if isinstance(df.dtypes[col], MoleculeDtype):
+                        add_smiles_map[col] = f'{col} SMILES'
+                    else:
+                        log.warning(f'Column {col} is not a MoleculeDtype')
+                else:
+                    log.warning(f'Column {col} not found in DataFrame')
+
+    # isinstance(add_smiles, dict)
+    else:
+        for col, smiles_col in add_smiles.items():
+            if col in df.columns:
+                if isinstance(df.dtypes[col], MoleculeDtype):
+                    add_smiles_map[col] = smiles_col
+                else:
+                    log.warning(f'Column {col} is not a MoleculeDtype')
+            else:
+                log.warning(f'Column {col} not found in DataFrame')
+
+    # Add the SMILES column(s)
+    # We always add canonical isomeric SMILES
+    for col, smiles_col in add_smiles_map.items():
+        df[smiles_col] = df[col].to_smiles(flavor=oechem.OESMILESFlag_ISOMERIC)
+
+
+class Column:
+    """
+    Column in a Pandas dataframe
+    """
+    def __init__(self, name: str, data: Iterable[Any] = None, dtype: Dtype = object):
+        self.name = name
+        self.data = data or []
+        self.dtype = dtype
+
+    def to_series_tuple(self) -> tuple[str, pd.Series]:
+        """
+        Convert to a tuple with the name and Pandas series
+        :return: Name, series tuple
+        """
+        return self.name, pd.Series(self.data, dtype=self.dtype)
+
+
 # def read_sdf(filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
 #              *,
 #              index_tag: IndexLabel | Literal[False] | None = None,
@@ -688,8 +786,9 @@ class MoleculeDtype(PandasExtensionDtype):
 
 def read_molecule_csv(
     filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
-    mol_cols: str | dict[str, int] | dict[str, str],
+    molecule_columns: str | dict[str, int] | dict[str, str],
     *,
+    add_smiles: None | bool | str | Iterable[str] = None,
     astype=oechem.OEGraphMol,
     # pd.read_csv options here for type completion
     sep: str | None | lib.NoDefault = lib.no_default,
@@ -809,7 +908,11 @@ def read_molecule_csv(
 
     # Convert molecule columns if we have data
     if len(df) > 0:
-        df.as_molecule(mol_cols, astype=astype, inplace=True)
+        df.as_molecule(molecule_columns, astype=astype, inplace=True)
+
+    # Process 'add_smiles' by first standardizing it to a dictionary
+    if add_smiles is not None:
+        _add_smiles_columns(df, molecule_columns, add_smiles)
 
     return df
 
@@ -891,9 +994,121 @@ def read_smi(
     return df
 
 
-# Monkey patch these into Pandas
+def read_sdf(
+    filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
+    *,
+    flavor: int | None = oechem.OEIFlavor_SDF_Default,
+    molecule_column: str = "Molecule",
+    title_column: str | None = "Title",
+    add_smiles: None | bool | str | Iterable[str] = None,
+    molecule_columns: None | str | Iterable[str] = None,
+    usecols: None | str | Iterable[str] = None,
+    numeric: None | str | dict[str, Literal["integer", "signed", "unsigned", "float"] | None] | Iterable[str] = None,
+    astype=oechem.OEGraphMol
+) -> pd.DataFrame:
+    # Read the molecules themselves
+    if not isinstance(filepath_or_buffer, (str, Path)):
+        raise NotImplementedError("Reading from buffers is not yet supported for read_sdf")
+
+    # If we have a subset of columns that we are reading
+    if usecols is not None:
+        usecols = frozenset((usecols,)) if isinstance(usecols, str) else frozenset(usecols)
+
+    # Make sure numeric is a dict of columns and type strings (None = let Pandas figure it out
+    if numeric is not None:
+        if isinstance(numeric, str):
+            numeric = {numeric: None}
+        elif isinstance(numeric, Iterable) and not isinstance(numeric, dict):
+            numeric = {col: None for col in numeric}
+
+        # Sanity check the molecule column
+        if molecule_column in numeric:
+            raise KeyError(f'Cannot make molecule column {molecule_column} numeric')
+
+    # Read the molecules into a molecule array
+    mols = MoleculeArray.read_sdf(filepath_or_buffer, flavor=flavor, astype=astype)
+
+    # --------------------------------------------------
+    # Start building our DataFrame with the molecules
+    # --------------------------------------------------
+    data = {molecule_column: Column(molecule_column, mols, dtype=MoleculeDtype())}
+
+    # Titles
+    if title_column is not None:
+        data[title_column] = Column(
+            title_column,
+            [mol.GetTitle() if isinstance(mol, oechem.OEMolBase) else None for mol in mols],
+            dtype=str
+        )
+
+    # SD data
+    for mol in mols:
+        for dp in oechem.OEGetSDDataPairs(mol):
+
+            # If we are using only specific columns
+            if usecols is None or dp.GetTag() in usecols:
+
+                # Create the column if it does not yet exist
+                if dp.GetTag() not in data:
+                    data[dp.GetTag()] = Column(dp.GetTag(), dtype=str)
+
+                # Add the value to the column
+                data[dp.GetTag()].data.append(dp.GetValue())
+
+    # Create the DataFrame
+    df = pd.DataFrame(dict(col.to_series_tuple() for col in data.values()))
+
+    # Post-process the dataframe only if we have data
+    if len(df) > 0:
+
+        # Parse other molecule columns
+        if molecule_columns is not None:
+            if isinstance(mols, str) and molecule_columns != molecule_column:
+                if molecule_columns in df.columns:
+                    df.as_molecule(molecule_column, inplace=True)
+                else:
+                    log.warning(f'Column not found in DataFrame: {molecule_columns}')
+
+            elif isinstance(mols, Iterable):
+                for col in molecule_columns:
+
+                    # Check if we have been asked to make this column numeric later
+                    if col in numeric:
+                        raise KeyError(f'Cannot make molecule column {col} numeric')
+
+                    if col in df.columns:
+                        if col != molecule_column:
+                            df.as_molecule(col, inplace=True)
+                    else:
+                        log.warning(f'Column not found in DataFrame: {col}')
+
+        # Cast numeric columns
+        if numeric is not None:
+            for col, dtype in numeric.items():
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="ignore", downcast=dtype)
+                else:
+                    log.warning(f'Column not found in DataFrame: {col}')
+
+        # Add SMILES column(s)
+        if add_smiles is not None:
+
+            if molecule_columns is None:
+                molecule_columns = [molecule_column]
+
+            _add_smiles_columns(df, molecule_columns, add_smiles)
+
+    return df
+
+
+# ----------------------------------------------------------------------
+# Monkey patch these into Pandas, which makes them discoverable to
+# people looking there and not in the oepandas package
+# ----------------------------------------------------------------------
+
 pd.read_molecule_csv = read_molecule_csv
 pd.read_smi = read_smi
+pd.read_sdf = read_sdf
 
 
 ########################################################################################################################
@@ -1141,13 +1356,32 @@ class SeriesAsMoleculeAccessor:
             astype=oechem.OEGraphMol):
         """
         Convert a series to molecules
-        :param fmt:
-        :param astype:
-        :return:
+        :param fmt: File format of column to convert to molecules (extension or from oechem.OEFormat namespace)
+        :param astype: oechem.OEGraphMol (default) or oechem.OEMol
+        :return: Series as molecule
         """
         # Column OEFormat
         _fmt = get_oeformat(fmt)
 
         # noinspection PyProtectedMember
-        array = MoleculeArray._from_sequence_of_strings(self._obj, astype=astype, fmt=_fmt.oeformat)
-        return pd.Series(array, index=self._obj.index)
+        arr = MoleculeArray._from_sequence_of_strings(self._obj, astype=astype, fmt=_fmt.oeformat)
+        return pd.Series(arr, index=self._obj.index)
+
+
+@register_series_accessor("to_smiles")
+class SeriesToSmilesAccessor:
+    def __init__(self, pandas_obj):
+        self._obj = pandas_obj
+
+    def __call__(
+            self,
+            *,
+            flavor: int = oechem.OESMILESFlag_ISOMERIC,
+            astype=oechem.OEGraphMol):
+        """
+        Convert a series to SMILES
+        :param flavor: Flavor for generating SMILES (bitmask from oechem.OESMILESFlag)
+        :return: Series of molecules as SMILES
+        """
+        arr = self._obj.array.to_smiles(flavor)
+        return pd.Series(arr, index=self._obj.index, dtype=str)

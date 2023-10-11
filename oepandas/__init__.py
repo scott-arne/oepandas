@@ -1,8 +1,16 @@
 import logging
-from .molecule import MoleculeArray, MoleculeDtype
 from .exception import FileError, UnsupportedFileFormat
 
-__version__ = '0.1.6'
+from .molecule import (
+    MoleculeArray,
+    MoleculeDtype,
+    read_molecule_csv,
+    read_smi,
+    read_sdf
+)
+
+
+__version__ = '0.1.7'
 
 
 ########################################################################################################################
