@@ -4,7 +4,7 @@ import csv
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from typing import Callable, Literal, Any, Mapping
+from typing import Callable, Literal, Any, Mapping, Protocol
 from collections.abc import Iterable, Hashable, Sequence, Generator
 from pandas.core.ops import unpack_zerodim_and_defer
 from pandas.core.dtypes.dtypes import PandasExtensionDtype
@@ -53,10 +53,27 @@ def _read_molecule_file(
         file_format: int | str,
         *,
         flavor: int | None = None,
-        astype: type[oechem.OEMolBase] =
-        oechem.OEMol) -> Generator[oechem.OEMolBase, None, None]:
+        astype: type[oechem.OEMolBase] = oechem.OEMol,
+        conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default"
+) -> Generator[oechem.OEMolBase, None, None]:
     """
     Generator over flavored reading of molecules in a specific file format
+
+    Use conformer_test to combine single conformers into multi-conformer molecules:
+        - "default":
+                No conformer testing.
+        - "absolute":
+                Combine conformers if they (1) have the same number of atoms and bonds in the same order, (2)
+                each atom and bond have identical properties in the connection table, (3) have the same title.
+        - "absolute_canonical":
+                Combine conformers if they have the same canonical SMILES
+        - "isomeric":
+                Combine conformers if they (1) have the same number of atoms and bonds in the same order, (2)
+                each atom and bond have identical properties in the connection table, (3) have the same atom and bond
+                stereochemistry, (4) have the same title.
+        - "omega":
+                Equivalent to "isomeric" except that invertible nitrogen stereochemistry is also taken into account.
+
     :param fp: File path
     :param file_format: File format (oechem.OEFormat)
     :param flavor: Optional flavor (oechem.OEIFlavor)
@@ -65,8 +82,23 @@ def _read_molecule_file(
     """
     fmt = get_oeformat(file_format)
 
+    # Conformer test forces OEMol
+    if conformer_test != "default":
+        astype = oechem.OEMol
+
     with oechem.oemolistream(str(fp)) as ifs:
         ifs.SetFormat(fmt.oeformat)
+
+        if conformer_test == "default":
+            ifs.SetConfTest(oechem.OEDefaultConfTest())
+        elif conformer_test == "absolute":
+            ifs.SetConfTest(oechem.OEAbsoluteConfTest())
+        elif conformer_test == "absolute_canonical":
+            ifs.SetConfTest(oechem.OEAbsCanonicalConfTest())
+        elif conformer_test == "isomeric":
+            ifs.SetConfTest(oechem.OEIsomericConfTest())
+        elif conformer_test == "omega":
+            ifs.SetConfTest(oechem.OEOmegaConfTest())
 
         # Set flavor if requested
         if flavor is not None:
@@ -270,26 +302,88 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
     # --------------------------------------------------------
 
     @classmethod
-    def read_sdf(cls, fp, flavor=None, astype: type[oechem.OEMolBase] = oechem.OEMol) -> Self:
+    def read_sdf(
+            cls,
+            fp,
+            flavor=None,
+            astype: type[oechem.OEMolBase] = oechem.OEMol,
+            conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default"
+    ) -> Self:
         """
         Read molecules from an SD file and return an array
+
+        Use conformer_test to combine single conformers into multi-conformer molecules:
+        - "default":
+                No conformer testing.
+        - "absolute":
+                Combine conformers if they (1) have the same number of atoms and bonds in the same order, (2)
+                each atom and bond have identical properties in the connection table, (3) have the same title.
+        - "absolute_canonical":
+                Combine conformers if they have the same canonical SMILES
+        - "isomeric":
+                Combine conformers if they (1) have the same number of atoms and bonds in the same order, (2)
+                each atom and bond have identical properties in the connection table, (3) have the same atom and bond
+                stereochemistry, (4) have the same title.
+        - "omega":
+                Equivalent to "isomeric" except that invertible nitrogen stereochemistry is also taken into account.
+
         :param fp: Path to the SD file
         :param flavor: OpenEye input flavor
         :param astype: Type of molecule to read
+        :param conformer_test: Conformer testing (will override astype to oechem.OEMol)
         :return: Molecule array populated by the molecules in the file
         """
-        return cls(_read_molecule_file(fp, oechem.OEFormat_SDF, flavor=flavor, astype=astype))
+        return cls(
+            _read_molecule_file(
+                fp,
+                oechem.OEFormat_SDF,
+                flavor=flavor,
+                astype=astype,
+                conformer_test=conformer_test
+            )
+        )
 
     @classmethod
-    def read_oeb(cls, fp, flavor=None, astype: type[oechem.OEMolBase] = oechem.OEMol) -> Self:
+    def read_oeb(
+            cls,
+            fp: FilePath,
+            flavor=None,
+            astype: type[oechem.OEMolBase] = oechem.OEMol,
+            conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default"
+    ) -> Self:
         """
         Read molecules from an OEB file and return an array
+
+        Use conformer_test to combine single conformers into multi-conformer molecules:
+        - "default":
+                No conformer testing.
+        - "absolute":
+                Combine conformers if they (1) have the same number of atoms and bonds in the same order, (2)
+                each atom and bond have identical properties in the connection table, (3) have the same title.
+        - "absolute_canonical":
+                Combine conformers if they have the same canonical SMILES
+        - "isomeric":
+                Combine conformers if they (1) have the same number of atoms and bonds in the same order, (2)
+                each atom and bond have identical properties in the connection table, (3) have the same atom and bond
+                stereochemistry, (4) have the same title.
+        - "omega":
+                Equivalent to "isomeric" except that invertible nitrogen stereochemistry is also taken into account.
+
         :param fp: Path to the OEB file
         :param flavor: OpenEye input flavor
         :param astype: Type of molecule to read
+        :param conformer_test: Conformer testing (will override astype to oechem.OEMol)
         :return: Molecule array populated by the molecules in the file
         """
-        return cls(_read_molecule_file(fp, oechem.OEFormat_OEB, flavor=flavor, astype=astype))
+        return cls(
+            _read_molecule_file(
+                fp,
+                oechem.OEFormat_OEB,
+                flavor=flavor,
+                astype=astype,
+                conformer_test=conformer_test
+            )
+        )
 
     @classmethod
     def read_smi(cls, fp, flavor=None, astype: type[oechem.OEMolBase] = oechem.OEMol) -> Self:
@@ -576,6 +670,45 @@ class MoleculeDtype(PandasExtensionDtype):
 # Pandas: Global Readers
 ########################################################################################################################
 
+class Column:
+    """
+    Column to create a Pandas DataFrame
+
+    The index attribute
+    """
+    def __init__(
+            self,
+            name: str,
+            data: Iterable[Any] = None,
+            dtype: Dtype = object,
+            index: list[Any] | None = None
+    ):
+        self.name = name
+        self.data = data or []
+        self.dtype = dtype
+        self.index = index or []
+
+    def to_series_tuple(self) -> tuple[str, pd.Series]:
+        """
+        Convert to a tuple with the name and Pandas series
+        :return: Name, series tuple
+        """
+        # If we did not track custom indexes
+        if self.index is None or len(self.index) == 0:
+            return self.name, pd.Series(self.data, dtype=self.dtype)
+
+        if len(self.index) != len(self.data):
+            raise ValueError(
+                "Number of data values ({}) != number of index values ({}) for column {}".format(
+                    len(self.data),
+                    len(self.index),
+                    self.name
+                )
+            )
+
+        return self.name, pd.Series(self.data, index=self.index, dtype=self.dtype)
+
+
 def _add_smiles_columns(
         df: pd.DataFrame,
         molecule_columns: str | Iterable[str] | dict[str, int] | dict[str, str],
@@ -639,150 +772,251 @@ def _add_smiles_columns(
         df[smiles_col] = df[col].to_smiles(flavor=oechem.OESMILESFlag_ISOMERIC)
 
 
-class Column:
+# Types
+class MoleculeArrayReaderProtocol(Protocol):
+    def __call__(
+            self,
+            fp: FilePath,
+            flavor: int | None,
+            astype: type[oechem.OEMolBase],
+            conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"]
+    ) -> MoleculeArray: ...
+
+
+def _read_file_with_data(
+    reader: MoleculeArrayReaderProtocol,
+    filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
+    *,
+    flavor: int | None = oechem.OEIFlavor_SDF_Default,
+    molecule_column_name: str = "Molecule",
+    title_column_name: str | None = "Title",
+    add_smiles: None | bool | str | Iterable[str] = None,
+    molecule_columns: None | str | Iterable[str] = None,
+    read_generic_data=True,
+    read_sd_data=True,
+    usecols: None | str | Iterable[str] = None,
+    numeric: None | str | dict[str, Literal["integer", "signed", "unsigned", "float"] | None] | Iterable[str] = None,
+    conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default",
+    combine_tags: Literal["prefix", "prefer_sd", "prefer_generic"] = "prefix",
+    sd_prefix: str = "SD Tag: ",
+    generic_prefix: str = "Generic Tag: ",
+    astype=oechem.OEGraphMol
+) -> pd.DataFrame:
     """
-    Column in a Pandas dataframe
+    Read a molecule file with SD data and/or generic data
+    :param reader: MoleculeArray method to use to read molecule
+    :param filepath_or_buffer: File path or buffer
+    :param flavor: SMILES flavor (part of oechem.OEIFlavor namespace)
+    :param molecule_column_name: Name of the molecule column in the dataframe
+    :param title_column_name: Name of the column with molecule titles in the dataframe
+    :param add_smiles: Include a SMILES column in the dataframe (SMILES will be re-canonicalized)
+    :param molecule_columns: Additional columns to convert to molecules
+    :param read_generic_data: If True, read generic data (default is True)
+    :param read_sd_data: If True, read SD data (default is True)
+    :param usecols: List of data tags to read (default is all read all generic and SD data)
+    :param numeric: Data column(s) to make numeric
+    :param conformer_test: Combine single conformer molecules into multiconformer
+    :param combine_tags: Strategy for combining identical SD and generic data tags
+    :param sd_prefix: Prefix for SD data with corresponding generic data columns (for combine_tags='prefix')
+    :param generic_prefix: Prefix for generic data with corresponding SD data columns (for combine_tags='prefix')
+    :param astype: Type of OpenEye molecule to read
+    :return:
     """
-    def __init__(self, name: str, data: Iterable[Any] = None, dtype: Dtype = object):
-        self.name = name
-        self.data = data or []
-        self.dtype = dtype
+    # Read the molecules themselves
+    if not isinstance(filepath_or_buffer, (str, Path)):
+        raise NotImplementedError("Reading from buffers is not yet supported for raed_oeb")
 
-    def to_series_tuple(self) -> tuple[str, pd.Series]:
-        """
-        Convert to a tuple with the name and Pandas series
-        :return: Name, series tuple
-        """
-        return self.name, pd.Series(self.data, dtype=self.dtype)
+    # --------------------------------------------------
+    # Preprocess usecols and numeric
+    # If we have a subset of columns that we are reading
+    # or are converting columns to numeric types
+    # --------------------------------------------------
+    if usecols is not None:
+        usecols = frozenset((usecols,)) if isinstance(usecols, str) else frozenset(usecols)
 
+    # Make sure numeric is a dict of columns and type strings (None = let Pandas figure it out
+    if numeric is not None:
+        if isinstance(numeric, str):
+            numeric = {numeric: None}
+        elif isinstance(numeric, Iterable) and not isinstance(numeric, dict):
+            numeric = {col: None for col in numeric}
 
-# def read_sdf(filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
-#              *,
-#              index_tag: IndexLabel | Literal[False] | None = None,
-#              usecols: list[HashableT] | Callable[[Hashable], bool] = None,
-#              skipmols: list[int] | int | Callable[[Hashable], bool] | None = None,
-#              conf_test: str | oechem.OEConfTestBase | None = None,
-#              astype=oechem.OEMol,
-#              expand_confs=False,
-#              include_first_conf_data=False,
-#              flavor: int | None = None,
-#              nmols: int | None = None) -> pd.DataFrame:
-#     """
-#     Read molecules from an SD file into a DataFrame
-#
-#     The conf_test parameter can either be a string or one of the OpenEye conformer testing types. Refer to the
-#     following list to see the valid string values and the corresponding Openeye conformer testing type::
-#
-#         - isomeric: oechem.OEIsomericConfTest()
-#         - absolute: oechem.OEAbsoluteConfTest()
-#         - omega: oechem.OEOmegaConfTest()
-#
-#     :param filepath_or_buffer:
-#     :param index_tag:
-#     :param usecols:
-#     :param skipmols:
-#     :param flavor: Flavored input (OEIFlavor)
-#     :param nmols:
-#     :param conf_test: Optional testing strategy for conformers in the SD file
-#     :return:
-#     """
-#     # Parse the conf test
-#     if conf_test is not None:
-#         if isinstance(conf_test, str):
-#             if conf_test == "isomeric":
-#                 conf_test = oechem.OEIsomericConfTest()
-#             elif conf_test == "absolute":
-#                 conf_test = oechem.OEAbsoluteConfTest()
-#             elif conf_test == "omega":
-#                 conf_test = oechem.OEOmegaConfTest()
-#             else:
-#                 raise KeyError(f'Invalid OpenEye conformer test type: {conf_test} (valid: isomeric, absolute, omega)')
-#
-#     if isinstance(filepath_or_buffer, FilePath):
-#
-#         fp = Path(filepath_or_buffer)
-#         fmt = get_oeformat(fp.suffix)
-#
-#         if not fmt.oeformat == oechem.OEFormat_SDF:
-#             raise FileError(f'{filepath_or_buffer} is not an SD file')
-#
-#         with oechem.oemolistream(str(filepath_or_buffer)) as ifs:
-#             # Flavored I/O
-#             if flavor is not None:
-#                 ifs.SetFlavor(oechem.OEFormat_SDF, flavor)
-#
-#             # Gzipped I/O
-#             ifs.Setgz(fmt.gzip)
-#
-#             # Conformer testing
-#             if conf_test is not None:
-#                 ifs.SetConfTest(conf_test)
-#
-#             # Iterate molecules
-#             iterator = ifs.GetOEMols if astype is oechem.OEMol else ifs.GetOEGraphMols
-#             for mol in iterator():
-#
-#                 print(mol)
-#     else:
-#         raise NotImplementedError("Only writing to files is currently implemented")
-#
-#     print(filepath_or_buffer)
-#
-#
-# def read_oeb(
-#         filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
-#         *,
-#         index_tag: IndexLabel | Literal[False] | None = None,
-#         usecols: list[HashableT] | Callable[[Hashable], bool] = None,
-#         skipmols: list[int] | int | Callable[[Hashable], bool] | None = None,
-#         astype=oechem.OEMol,
-#         expand_confs=False,
-#         include_first_conf_data=False,
-#         flavor: int | None = None,
-#         nmols: int | None = None,
-#         sd_data: bool = False) -> pd.DataFrame:
-#     """
-#
-#     :param filepath_or_buffer:
-#     :param index_tag:
-#     :param usecols:
-#     :param skipmols:
-#     :param flavor: Flavored input (OEIFlavor)
-#     :type flavor: int or None
-#     :param nmols:
-#     :param sd_data:
-#     :return:
-#     """
-#     print(filepath_or_buffer)
-#
-#
-# def read_oez(
-#         filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
-#         *,
-#         index_field: IndexLabel | Literal[False] | None = None,
-#         usecols: list[HashableT] | Callable[[Hashable], bool] = None,
-#         skipmols: list[int] | int | Callable[[Hashable], bool] | None = None,
-#         nmols: int | None = None) -> pd.DataFrame:
-#     """
-#
-#     :param filepath_or_buffer:
-#     :param index_field:
-#     :param usecols:
-#     :param skipmols:
-#     :param nmols:
-#     :return:
-#     """
-#     print(filepath_or_buffer)
-#
-#
-# def read_oecsv(
-#         filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
-#         *,
-#         index_col: IndexLabel | Literal[False] | None = None,
-#         usecols: list[HashableT] | Callable[[Hashable], bool] = None,
-#         skiprows: list[int] | int | Callable[[Hashable], bool] | None = None,
-#         nrows: int | None = None) -> pd.DataFrame:
-#     pass
+        # Sanity check the molecule column
+        if molecule_column_name in numeric:
+            raise KeyError(f'Cannot make molecule column {molecule_column_name} numeric')
+
+    # Read the molecules into a molecule array
+    mols = reader(filepath_or_buffer, flavor=flavor, astype=astype, conformer_test=conformer_test)
+
+    # --------------------------------------------------
+    # Start building our DataFrame with the molecules
+    # --------------------------------------------------
+    data = {molecule_column_name: Column(molecule_column_name, mols, dtype=MoleculeDtype())}
+
+    # Titles
+    if title_column_name is not None:
+        data[title_column_name] = Column(
+            title_column_name,
+            [mol.GetTitle() if isinstance(mol, oechem.OEMolBase) else None for mol in mols],
+            dtype=str
+        )
+
+    # ----------------------------------------------------------------------
+    # Index the data tags and create the columns
+    # We need to track both generic data and SD data separately in case
+    # we have identical tags. We will apply the combine_tags rule in order
+    # to differentiate between identical tags at the end.
+    # ----------------------------------------------------------------------
+
+    sd_data = {}
+    generic_data = {}
+
+    for mol in mols:
+        if read_sd_data:
+            for dp in oechem.OEGetSDDataPairs(mol):
+                if (usecols is None or dp.GetTag() in usecols) and (dp.GetTag() not in sd_data):
+                    # SD data is always type object, which we'll use until string support is no longer experimental
+                    # in Pandas
+                    sd_data[dp.GetTag()] = Column(dp.GetTag(), dtype=object)
+
+            if read_generic_data:
+                for diter in mol.GetDataIter():
+                    tag = oechem.OEGetTag(diter.GetTag())
+                    if (usecols is None or tag in usecols) and (tag not in generic_data) and (tag != "SDTagData"):
+                        try:
+                            value = diter.GetData()
+
+                            # Can value ever be None/null in the toolkits?
+                            if value is not None:
+                                print("FOUND", tag, "with type", type(value))
+                                generic_data[tag] = Column(tag, dtype=type(value))
+
+                        except Exception as ex:  # noqa
+                            print(str(ex))
+                            continue
+
+    # ----------------------------------------------------------------------
+    # Get the data off the molecules
+    # ----------------------------------------------------------------------
+
+    for idx, mol in enumerate(mols):
+
+        # Differentiate between SD data and generic data
+        sd_data_found = {}
+        generic_data_found = {}
+
+        if read_sd_data:
+            for dp in oechem.OEGetSDDataPairs(mol):
+
+                # Only read SD data indexed above
+                if dp.GetTag() in sd_data:
+                    sd_data_found[dp.GetTag()] = dp.GetValue()
+
+            if read_generic_data:
+                for diter in mol.GetDataIter():
+
+                    # Only read generic data indexed above
+                    tag = oechem.OEGetTag(diter.GetTag())
+                    if tag in generic_data:
+                        try:
+                            val = diter.GetData()
+                            generic_data_found[tag] = val
+                        except:  # noqa
+                            # Use NaN for floats
+                            if generic_data[tag].dtype == float or np.issubdtype(generic_data[tag].dtype, np.floating):
+                                generic_data_found[tag] = np.nan
+                            # TODO: Customize integer NaN value
+                            elif generic_data[tag].dtype == int or np.issubdtype(generic_data[tag].dtype, np.integer):
+                                generic_data_found[tag] = -1
+                            elif generic_data[tag].dtype == str or np.issubdtype(generic_data[tag].dtype, np.str_):
+                                generic_data[tag] = ''
+                            # And None for everything else
+                            else:
+                                generic_data_found[tag] = None
+
+        # Add all the found SD data
+        for k, v in sd_data_found.items():
+            sd_data[k].data.append(v)
+            sd_data[k].index.append(idx)
+
+        # Add all the found generic data
+        for k, v in generic_data_found.items():
+            generic_data[k].data.append(v)
+            generic_data[k].index.append(idx)
+
+    # Resolve overlapping column names between SD data and generic data
+    for col in set(sd_data.keys()).intersection(set(generic_data.keys())):
+        if combine_tags == "prefix":
+
+            new_sd_name = f'{sd_prefix}{col}'
+            new_generic_name = f'{generic_prefix}{col}'
+
+            sd_data[new_sd_name] = sd_data.pop(col)
+            sd_data[new_sd_name].name = new_sd_name
+
+            generic_data[new_generic_name] = generic_data.pop(col)
+            generic_data[new_generic_name].name = new_generic_name
+
+        elif combine_tags == "prefer_sd":
+            del generic_data[col]
+
+        elif combine_tags == "prefer_generic":
+            del sd_data[col]
+
+        else:
+            raise KeyError(f'Unknown combine_tags strategy: {combine_tags}')
+
+    # Combine the tags:
+    data = {
+        **data,
+        **sd_data,
+        **generic_data
+    }
+
+    # Create the DataFrame
+    df = pd.DataFrame(dict(col.to_series_tuple() for col in data.values()))
+
+    # Post-process the dataframe only if we have data
+    if len(df) > 0:
+
+        if molecule_columns is not None:
+            if isinstance(molecule_columns, str) and molecule_columns != molecule_column_name:
+                if molecule_columns in df.columns:
+                    df.as_molecule(molecule_column_name, inplace=True)
+                else:
+                    log.warning(f'Column not found in DataFrame: {molecule_columns}')
+
+            elif isinstance(molecule_columns, Iterable):
+                for col in molecule_columns:
+
+                    # Check if we have been asked to make this column numeric later
+                    if col in numeric:
+                        raise KeyError(f'Cannot make molecule column {col} numeric')
+
+                    if col in df.columns:
+                        if col != molecule_column_name:
+                            df.as_molecule(col, inplace=True)
+                    else:
+                        log.warning(f'Column not found in DataFrame: {col}')
+
+        # Cast numeric columns
+        if numeric is not None:
+            for col, dtype in numeric.items():
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="ignore", downcast=dtype)
+                else:
+                    log.warning(f'Column not found in DataFrame: {col}')
+
+        # Add SMILES column(s)
+        if add_smiles is not None:
+
+            if molecule_columns is None:
+                molecule_columns = [molecule_column_name]
+
+            _add_smiles_columns(df, molecule_columns, add_smiles)
+
+    return df
+
 
 def read_molecule_csv(
     filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
@@ -924,10 +1158,10 @@ def read_smi(
     flavor: int | None = None,
     add_smiles: bool = False,
     add_inchi_key: bool = False,
-    molecule_column: str = "Molecule",
-    title_column: str = "Title",
-    smiles_column: str = "SMILES",
-    inchi_key_column: str = "InChI Key",
+    molecule_column_name: str = "Molecule",
+    title_column_name: str = "Title",
+    smiles_column_name: str = "SMILES",
+    inchi_key_column_name: str = "InChI Key",
     astype=oechem.OEGraphMol
 ) -> pd.DataFrame:
     """
@@ -937,10 +1171,10 @@ def read_smi(
     :param flavor: SMILES flavor (part of oechem.OEIFlavor namespace)
     :param add_smiles: Include a SMILES column in the dataframe (SMILES will be re-canonicalized)
     :param add_inchi_key: Include an InChI key column in the dataframe
-    :param molecule_column: Name of the molecule column in the dataframe
-    :param title_column: Name of the column with molecule titles in the dataframe
-    :param smiles_column: Name of the SMILES column (if smiles is True)
-    :param inchi_key_column: Name of the InChI key column (if inchi_key is True)
+    :param molecule_column_name: Name of the molecule column in the dataframe
+    :param title_column_name: Name of the column with molecule titles in the dataframe
+    :param smiles_column_name: Name of the SMILES column (if smiles is True)
+    :param inchi_key_column_name: Name of the InChI key column (if inchi_key is True)
     :param astype: Type of OpenEye molecule to read
     :return: Dataframe with molecules
     """
@@ -950,13 +1184,13 @@ def read_smi(
     data = []
 
     # Configure the column headers and order
-    columns = [title_column, molecule_column]
+    columns = [title_column_name, molecule_column_name]
 
     if add_smiles:
-        columns.append(smiles_column)
+        columns.append(smiles_column_name)
 
     if add_inchi_key:
-        columns.append(inchi_key_column)
+        columns.append(inchi_key_column_name)
 
     # -----------------------------------
     # Read a file
@@ -973,15 +1207,15 @@ def read_smi(
             flavor=flavor,
             astype=astype
     ):
-        row_data = {title_column: mol.GetTitle(), molecule_column: mol.CreateCopy()}
+        row_data = {title_column_name: mol.GetTitle(), molecule_column_name: mol.CreateCopy()}
 
         # If adding smiles
         if add_smiles:
-            row_data[smiles_column] = oechem.OEMolToSmiles(mol)
+            row_data[smiles_column_name] = oechem.OEMolToSmiles(mol)
 
         # If adding InChI keys
         if add_inchi_key:
-            row_data[inchi_key_column] = oechem.OEMolToInChIKey(mol)
+            row_data[inchi_key_column_name] = oechem.OEMolToInChIKey(mol)
 
         data.append(row_data)
 
@@ -989,7 +1223,7 @@ def read_smi(
 
     # Convert only if the dataframe is not empty
     if len(df) > 0:
-        df.as_molecule(molecule_column, inplace=True)
+        df.as_molecule(molecule_column_name, inplace=True)
 
     return df
 
@@ -998,107 +1232,147 @@ def read_sdf(
     filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
     *,
     flavor: int | None = oechem.OEIFlavor_SDF_Default,
-    molecule_column: str = "Molecule",
-    title_column: str | None = "Title",
+    molecule_column_name: str = "Molecule",
+    title_column_name: str | None = "Title",
     add_smiles: None | bool | str | Iterable[str] = None,
     molecule_columns: None | str | Iterable[str] = None,
     usecols: None | str | Iterable[str] = None,
     numeric: None | str | dict[str, Literal["integer", "signed", "unsigned", "float"] | None] | Iterable[str] = None,
+    conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default",
+    sd_data: bool = True,
     astype=oechem.OEGraphMol
 ) -> pd.DataFrame:
-    # Read the molecules themselves
-    if not isinstance(filepath_or_buffer, (str, Path)):
-        raise NotImplementedError("Reading from buffers is not yet supported for read_sdf")
+    """
+    Read structures from an SD file into a DataFrame.
 
-    # If we have a subset of columns that we are reading
-    if usecols is not None:
-        usecols = frozenset((usecols,)) if isinstance(usecols, str) else frozenset(usecols)
+    Use conformer_test to combine single conformers into multi-conformer molecules:
+        - "default":
+                No conformer testing.
+        - "absolute":
+                Combine conformers if they (1) have the same number of atoms and bonds in the same order, (2)
+                each atom and bond have identical properties in the connection table, (3) have the same title.
+        - "absolute_canonical":
+                Combine conformers if they have the same canonical SMILES
+        - "isomeric":
+                Combine conformers if they (1) have the same number of atoms and bonds in the same order, (2)
+                each atom and bond have identical properties in the connection table, (3) have the same atom and bond
+                stereochemistry, (4) have the same title.
+        - "omega":
+                Equivalent to "isomeric" except that invertible nitrogen stereochemistry is also taken into account.
 
-    # Make sure numeric is a dict of columns and type strings (None = let Pandas figure it out
-    if numeric is not None:
-        if isinstance(numeric, str):
-            numeric = {numeric: None}
-        elif isinstance(numeric, Iterable) and not isinstance(numeric, dict):
-            numeric = {col: None for col in numeric}
+    Use numeric to cast data columns to numeric types, which is specifically useful for SD data, which is always stored
+    as a string:
+        1. Single column name (default numeric cast)
+        2. List of column names (default numeric cast)
+        3. Dictionary of column names and specific numeric types to downcast to
 
-        # Sanity check the molecule column
-        if molecule_column in numeric:
-            raise KeyError(f'Cannot make molecule column {molecule_column} numeric')
+    :param filepath_or_buffer: File path or buffer
+    :param flavor: SMILES flavor (part of oechem.OEIFlavor namespace)
+    :param add_smiles: Include a SMILES column in the dataframe (SMILES will be re-canonicalized)
+    :param molecule_column_name: Name of the molecule column in the dataframe
+    :param molecule_columns: Additional columns to convert to molecules
+    :param title_column_name: Name of the column with molecule titles in the dataframe
+    :param usecols: List of SD tags to read (default is all SD data is read)
+    :param numeric: Data column(s) to make numeric
+    :param conformer_test: Combine single conformer molecules into multiconformer
+    :param sd_data: Read SD data
+    :param astype: Type of OpenEye molecule to read
+    :return: Pandas DataFrame
+    """
+    return _read_file_with_data(
+        MoleculeArray.read_sdf,
+        filepath_or_buffer,
+        flavor=flavor,
+        molecule_column_name=molecule_column_name,
+        title_column_name=title_column_name,
+        add_smiles=add_smiles,
+        molecule_columns=molecule_columns,
+        read_generic_data=False,
+        read_sd_data=sd_data,
+        usecols=usecols,
+        numeric=numeric,
+        conformer_test=conformer_test,
+        astype=astype
+    )
 
-    # Read the molecules into a molecule array
-    mols = MoleculeArray.read_sdf(filepath_or_buffer, flavor=flavor, astype=astype)
 
-    # --------------------------------------------------
-    # Start building our DataFrame with the molecules
-    # --------------------------------------------------
-    data = {molecule_column: Column(molecule_column, mols, dtype=MoleculeDtype())}
+def read_oeb(
+    filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
+    *,
+    flavor: int | None = oechem.OEIFlavor_SDF_Default,
+    molecule_column_name: str = "Molecule",
+    title_column_name: str | None = "Title",
+    add_smiles: None | bool | str | Iterable[str] = None,
+    molecule_columns: None | str | Iterable[str] = None,
+    read_generic_data: bool = True,
+    read_sd_data: bool = True,
+    usecols: None | str | Iterable[str] = None,
+    numeric: None | str | dict[str, Literal["integer", "signed", "unsigned", "float"] | None] | Iterable[str] = None,
+    conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default",
+    combine_tags: Literal["prefix", "prefer_sd", "prefer_generic"] = "prefix",
+    sd_prefix: str = "SD Tag: ",
+    generic_prefix: str = "Generic Tag: ",
+    astype=oechem.OEGraphMol
+) -> pd.DataFrame:
+    """
+    Read structures OpenEye binary molecule files.
 
-    # Titles
-    if title_column is not None:
-        data[title_column] = Column(
-            title_column,
-            [mol.GetTitle() if isinstance(mol, oechem.OEMolBase) else None for mol in mols],
-            dtype=str
-        )
+    Use conformer_test to combine single conformers into multi-conformer molecules:
+        - "default":
+                No conformer testing.
+        - "absolute":
+                Combine conformers if they (1) have the same number of atoms and bonds in the same order, (2)
+                each atom and bond have identical properties in the connection table, (3) have the same title.
+        - "absolute_canonical":
+                Combine conformers if they have the same canonical SMILES
+        - "isomeric":
+                Combine conformers if they (1) have the same number of atoms and bonds in the same order, (2)
+                each atom and bond have identical properties in the connection table, (3) have the same atom and bond
+                stereochemistry, (4) have the same title.
+        - "omega":
+                Equivalent to "isomeric" except that invertible nitrogen stereochemistry is also taken into account.
 
-    # SD data
-    for mol in mols:
-        for dp in oechem.OEGetSDDataPairs(mol):
+    Use numeric to cast data columns to numeric types, which is specifically useful for SD data, which is always stored
+    as a string:
+        1. Single column name (default numeric cast)
+        2. List of column names (default numeric cast)
+        3. Dictionary of column names and specific numeric types to downcast to
 
-            # If we are using only specific columns
-            if usecols is None or dp.GetTag() in usecols:
-
-                # Create the column if it does not yet exist
-                if dp.GetTag() not in data:
-                    data[dp.GetTag()] = Column(dp.GetTag(), dtype=str)
-
-                # Add the value to the column
-                data[dp.GetTag()].data.append(dp.GetValue())
-
-    # Create the DataFrame
-    df = pd.DataFrame(dict(col.to_series_tuple() for col in data.values()))
-
-    # Post-process the dataframe only if we have data
-    if len(df) > 0:
-
-        # Parse other molecule columns
-        if molecule_columns is not None:
-            if isinstance(mols, str) and molecule_columns != molecule_column:
-                if molecule_columns in df.columns:
-                    df.as_molecule(molecule_column, inplace=True)
-                else:
-                    log.warning(f'Column not found in DataFrame: {molecule_columns}')
-
-            elif isinstance(mols, Iterable):
-                for col in molecule_columns:
-
-                    # Check if we have been asked to make this column numeric later
-                    if col in numeric:
-                        raise KeyError(f'Cannot make molecule column {col} numeric')
-
-                    if col in df.columns:
-                        if col != molecule_column:
-                            df.as_molecule(col, inplace=True)
-                    else:
-                        log.warning(f'Column not found in DataFrame: {col}')
-
-        # Cast numeric columns
-        if numeric is not None:
-            for col, dtype in numeric.items():
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors="ignore", downcast=dtype)
-                else:
-                    log.warning(f'Column not found in DataFrame: {col}')
-
-        # Add SMILES column(s)
-        if add_smiles is not None:
-
-            if molecule_columns is None:
-                molecule_columns = [molecule_column]
-
-            _add_smiles_columns(df, molecule_columns, add_smiles)
-
-    return df
+    :param filepath_or_buffer: File path or buffer
+    :param flavor: SMILES flavor (part of oechem.OEIFlavor namespace)
+    :param add_smiles: Include a SMILES column in the dataframe (SMILES will be re-canonicalized)
+    :param molecule_column_name: Name of the molecule column in the dataframe
+    :param molecule_columns: Additional columns to convert to molecules
+    :param title_column_name: Name of the column with molecule titles in the dataframe
+    :param read_generic_data: If True, read generic data (default is True)
+    :param read_sd_data: If True, read SD data (default is True)
+    :param usecols: List of data tags to read (default is all read all generic and SD data)
+    :param numeric: Data column(s) to make numeric
+    :param conformer_test: Combine single conformer molecules into multiconformer
+    :param combine_tags: Strategy for combining identical SD and generic data tags
+    :param sd_prefix: Prefix for SD data with corresponding generic data columns (for combine_tags='prefix')
+    :param generic_prefix: Prefix for generic data with corresponding SD data columns (for combine_tags='prefix')
+    :param astype: Type of OpenEye molecule to read
+    :return: Pandas DataFrame
+    """
+    return _read_file_with_data(
+        MoleculeArray.read_oeb,
+        filepath_or_buffer,
+        flavor=flavor,
+        molecule_column_name=molecule_column_name,
+        title_column_name=title_column_name,
+        add_smiles=add_smiles,
+        molecule_columns=molecule_columns,
+        read_generic_data=read_generic_data,
+        read_sd_data=read_sd_data,
+        usecols=usecols,
+        numeric=numeric,
+        conformer_test=conformer_test,
+        combine_tags=combine_tags,
+        sd_prefix=sd_prefix,
+        generic_prefix=generic_prefix,
+        astype=astype
+    )
 
 
 # ----------------------------------------------------------------------
@@ -1109,6 +1383,8 @@ def read_sdf(
 pd.read_molecule_csv = read_molecule_csv
 pd.read_smi = read_smi
 pd.read_sdf = read_sdf
+pd.read_oeb = read_oeb
+# pd.read_oez = read_oez
 
 
 ########################################################################################################################

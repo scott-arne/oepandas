@@ -29,7 +29,7 @@ def get_oeformat(ext_or_oeformat: int | str, gzip: bool = False) -> FileFormat:
     if isinstance(ext_or_oeformat, str):
         if (oeformat := oechem.GetFileFormat(ext_or_oeformat)) != oechem.OEFormat_UNDEFINED:
             return FileFormat(
-                ext=oechem.OEGetFormatExtension(oeformat),
+                ext=oechem.OEGetFormatExtension(oeformat).split(',')[0],
                 oeformat=oeformat,
                 name=oechem.OEGetFormatString(oeformat),
                 gzip=gzip or ext_or_oeformat.endswith(".gz")
@@ -37,7 +37,7 @@ def get_oeformat(ext_or_oeformat: int | str, gzip: bool = False) -> FileFormat:
         raise UnsupportedFileFormat(f'Unsupported file format: {ext_or_oeformat}')
     elif isinstance(ext_or_oeformat, int):
         return FileFormat(
-            ext=oechem.OEGetFormatExtension(ext_or_oeformat),
+            ext=oechem.OEGetFormatExtension(ext_or_oeformat).split(',')[0],
             oeformat=ext_or_oeformat,
             name=oechem.OEGetFormatString(ext_or_oeformat),
             gzip=gzip

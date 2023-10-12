@@ -231,7 +231,6 @@ class TestMoleculeArray(unittest.TestCase):
             self.assertEqual(str(df.dtypes["Integer Tag"]), "uint8")
             self.assertEqual(str(df.dtypes["Float Tag"]), "float32")
 
-
     def test_to_smiles(self):
         """
         Convert to a SMILES array

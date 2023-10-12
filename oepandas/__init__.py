@@ -6,11 +6,14 @@ from .molecule import (
     MoleculeDtype,
     read_molecule_csv,
     read_smi,
-    read_sdf
+    read_sdf,
+    read_oeb
 )
 
 
-__version__ = '0.1.7'
+__version__ = '0.2.0'
+
+__all__ = ["exception", "molecule", "util"]
 
 
 ########################################################################################################################
