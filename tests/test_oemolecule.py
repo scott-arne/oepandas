@@ -1,5 +1,5 @@
 import unittest
-import numpy as np
+import base64 as b64
 import pandas as pd
 import oepandas as oepd
 from oepandas import MoleculeArray, MoleculeDtype
@@ -249,7 +249,7 @@ class TestMoleculeArray(unittest.TestCase):
             'CC(C)Cc1ccc(cc1)OC2=CC(=O)c3c(cccc3O)C2=O',
             'Cc1cn(c(=O)o1)[C@@H]2C[C@@H](c3[nH]c4cccc(c4n3)S2(=O)=O)c5ccccc5',
             'CN(C)C1CC[C@H]2C=CC(=C[C@@]2(C1)O)Cl',
-            None
+            ''
         ]
 
         self.assertListEqual(expected, arr.to_smiles().tolist())
@@ -268,8 +268,261 @@ class TestMoleculeArray(unittest.TestCase):
 
         expected = [
             "CC(=O)Oc1ccccc1C(=O)O",
-            None,
+            '',
             "CC(C)Cc1ccc(cc1)C(C)C(=O)O"
         ]
 
         self.assertListEqual(expected, df.MOL.to_smiles().tolist())
+
+    def test_series_to_molecule_string(self):
+        """
+        Convert a series to various molecule file formats
+        """
+        x = MoleculeArray.read_smi(Path(ASSETS, "10.smi"))
+        df = pd.DataFrame([
+            {"Title": x[0].GetTitle(), "MOL": x[0]},
+            {"Title": "Invalid", "MOL": oechem.OEMol()},
+            {"Title": x[1].GetTitle(), "MOL": x[1]},
+        ])
+        df["MOL"] = df.MOL.astype(MoleculeDtype())
+
+        # ----------------------------------------------
+        # SMILES
+        # ----------------------------------------------
+
+        # We expect the molecules to have these SMILES strings
+        expected_strings = [
+            oechem.OEWriteMolToBytes(
+                oechem.OEFormat_SMI,
+                oechem.OEGetDefaultOFlavor(oechem.OEFormat_SMI),
+                False,
+                x[0]
+            ).decode('utf-8'),
+            '',
+            oechem.OEWriteMolToBytes(
+                oechem.OEFormat_SMI,
+                oechem.OEGetDefaultOFlavor(oechem.OEFormat_SMI),
+                False,
+                x[1]
+            ).decode('utf-8'),
+        ]
+
+        with self.subTest("Canonical isomeric SMILES"):
+            df["TEST"] = df.MOL.to_molecule_strings(molecule_format=oechem.OEFormat_SMI)
+            self.assertListEqual(
+                expected_strings,
+                df.TEST.tolist()
+            )
+
+        # ----------------------------------------------
+        # SDF v3000
+        # ----------------------------------------------
+
+        # We expect the molecules to have these SMILES strings
+        expected_strings = [
+            oechem.OEWriteMolToBytes(
+                oechem.OEFormat_SDF,
+                oechem.OEGetDefaultOFlavor(oechem.OEFormat_SDF) | oechem.OEOFlavor_SDF_MV30,
+                False,
+                x[0]
+            ).decode('utf-8'),
+            '',
+            oechem.OEWriteMolToBytes(
+                oechem.OEFormat_SDF,
+                oechem.OEGetDefaultOFlavor(oechem.OEFormat_SDF) | oechem.OEOFlavor_SDF_MV30,
+                False,
+                x[1]
+            ).decode('utf-8'),
+        ]
+
+        with self.subTest("SDF v3000"):
+            df["TEST"] = df.MOL.to_molecule_strings(
+                molecule_format=oechem.OEFormat_SDF,
+                flavor=oechem.OEGetDefaultOFlavor(oechem.OEFormat_SDF) | oechem.OEOFlavor_SDF_MV30
+            )
+            self.assertListEqual(
+                expected_strings,
+                df.TEST.tolist()
+            )
+
+        # ----------------------------------------------
+        # SDF v3000 b64 encoded
+        # ----------------------------------------------
+
+        with self.subTest("SDF v3000 with forced b64 encoding"):
+            df["TEST"] = df.MOL.to_molecule_strings(
+                molecule_format=oechem.OEFormat_SDF,
+                flavor=oechem.OEGetDefaultOFlavor(oechem.OEFormat_SDF) | oechem.OEOFlavor_SDF_MV30,
+                b64encode=True
+            )
+            self.assertListEqual(
+                list(map(lambda x: b64.b64encode(x.encode('utf-8')).decode('utf-8'), expected_strings)),
+                df.TEST.tolist()
+            )
+
+        # ----------------------------------------------
+        # SDF v3000 gzipped
+        # ----------------------------------------------
+
+        # We expect the molecules to have these SMILES strings
+        expected_strings = [
+            b64.b64encode(
+                oechem.OEWriteMolToBytes(
+                    oechem.OEFormat_SDF,
+                    oechem.OEGetDefaultOFlavor(oechem.OEFormat_SDF) | oechem.OEOFlavor_SDF_MV30,
+                    True,
+                    x[0]
+                )
+            ).decode('utf-8'),
+            '',
+            b64.b64encode(
+                oechem.OEWriteMolToBytes(
+                    oechem.OEFormat_SDF,
+                    oechem.OEGetDefaultOFlavor(oechem.OEFormat_SDF) | oechem.OEOFlavor_SDF_MV30,
+                    True,
+                    x[1]
+                )
+            ).decode('utf-8'),
+        ]
+
+        with self.subTest("SDF v3000 gzipped"):
+            df["TEST"] = df.MOL.to_molecule_strings(
+                molecule_format=oechem.OEFormat_SDF,
+                flavor=oechem.OEGetDefaultOFlavor(oechem.OEFormat_SDF) | oechem.OEOFlavor_SDF_MV30,
+                gzip=True
+            )
+            self.assertListEqual(
+                expected_strings,
+                df.TEST.tolist()
+            )
+
+        # ----------------------------------------------
+        # SDF v3000 gzipped by extension
+        # ----------------------------------------------
+
+        with self.subTest("SDF v3000 gzipped by file format extension"):
+            df["TEST"] = df.MOL.to_molecule_strings(
+                molecule_format=".sdf.gz",
+                flavor=oechem.OEGetDefaultOFlavor(oechem.OEFormat_SDF) | oechem.OEOFlavor_SDF_MV30,
+            )
+            self.assertListEqual(
+                expected_strings,
+                df.TEST.tolist()
+            )
+
+    def test_series_to_molecule_bytes(self):
+        """
+        Convert a series to various molecule file formats
+        """
+        x = MoleculeArray.read_smi(Path(ASSETS, "10.smi"))
+        df = pd.DataFrame([
+            {"Title": x[0].GetTitle(), "MOL": x[0]},
+            {"Title": "Invalid", "MOL": oechem.OEMol()},
+            {"Title": x[1].GetTitle(), "MOL": x[1]},
+        ])
+        df["MOL"] = df.MOL.astype(MoleculeDtype())
+
+        # ----------------------------------------------
+        # SMILES
+        # ----------------------------------------------
+
+        # We expect the molecules to have these SMILES strings
+        expected_bytes = [
+            oechem.OEWriteMolToBytes(
+                oechem.OEFormat_SMI,
+                oechem.OEGetDefaultOFlavor(oechem.OEFormat_SMI),
+                False,
+                x[0]
+            ),
+            b'',
+            oechem.OEWriteMolToBytes(
+                oechem.OEFormat_SMI,
+                oechem.OEGetDefaultOFlavor(oechem.OEFormat_SMI),
+                False,
+                x[1]
+            ),
+        ]
+
+        with self.subTest("Canonical isomeric SMILES"):
+            df["TEST"] = df.MOL.to_molecule_bytes(molecule_format=oechem.OEFormat_SMI)
+            self.assertListEqual(
+                expected_bytes,
+                df.TEST.tolist()
+            )
+
+        # ----------------------------------------------
+        # SDF v3000
+        # ----------------------------------------------
+
+        # We expect the molecules to have these SMILES strings
+        expected_bytes = [
+            oechem.OEWriteMolToBytes(
+                oechem.OEFormat_SDF,
+                oechem.OEGetDefaultOFlavor(oechem.OEFormat_SDF) | oechem.OEOFlavor_SDF_MV30,
+                False,
+                x[0]
+            ),
+            b'',
+            oechem.OEWriteMolToBytes(
+                oechem.OEFormat_SDF,
+                oechem.OEGetDefaultOFlavor(oechem.OEFormat_SDF) | oechem.OEOFlavor_SDF_MV30,
+                False,
+                x[1]
+            ),
+        ]
+
+        with self.subTest("SDF v3000"):
+            df["TEST"] = df.MOL.to_molecule_bytes(
+                molecule_format=oechem.OEFormat_SDF,
+                flavor=oechem.OEGetDefaultOFlavor(oechem.OEFormat_SDF) | oechem.OEOFlavor_SDF_MV30
+            )
+            self.assertListEqual(
+                expected_bytes,
+                df.TEST.tolist()
+            )
+
+        # ----------------------------------------------
+        # SDF v3000 gzipped
+        # ----------------------------------------------
+
+        # We expect the molecules to have these SMILES strings
+        expected_bytes = [
+            oechem.OEWriteMolToBytes(
+                oechem.OEFormat_SDF,
+                oechem.OEGetDefaultOFlavor(oechem.OEFormat_SDF) | oechem.OEOFlavor_SDF_MV30,
+                True,
+                x[0]
+            ),
+            b'',
+            oechem.OEWriteMolToBytes(
+                oechem.OEFormat_SDF,
+                oechem.OEGetDefaultOFlavor(oechem.OEFormat_SDF) | oechem.OEOFlavor_SDF_MV30,
+                True,
+                x[1]
+            ),
+        ]
+
+        with self.subTest("SDF v3000 gzipped"):
+            df["TEST"] = df.MOL.to_molecule_bytes(
+                molecule_format=oechem.OEFormat_SDF,
+                flavor=oechem.OEGetDefaultOFlavor(oechem.OEFormat_SDF) | oechem.OEOFlavor_SDF_MV30,
+                gzip=True
+            )
+            self.assertListEqual(
+                [b.rstrip(b'\x00') for b in expected_bytes],
+                df.TEST.tolist()
+            )
+
+        # ----------------------------------------------
+        # SDF v3000 gzipped by extension
+        # ----------------------------------------------
+
+        with self.subTest("SDF v3000 gzipped by file format extension"):
+            df["TEST"] = df.MOL.to_molecule_bytes(
+                molecule_format=".sdf.gz",
+                flavor=oechem.OEGetDefaultOFlavor(oechem.OEFormat_SDF) | oechem.OEOFlavor_SDF_MV30,
+            )
+            self.assertListEqual(
+                [b.rstrip(b'\x00') for b in expected_bytes],
+                df.TEST.tolist()
+            )

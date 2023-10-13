@@ -1,7 +1,7 @@
 import logging
+import base64 as b64
 from openeye import oechem
 from dataclasses import dataclass
-from base64 import b64encode, b64decode
 from .exception import UnsupportedFileFormat
 
 log = logging.getLogger("oepandas")
@@ -55,17 +55,23 @@ def molecule_to_string(mol: oechem.OEMolBase, fmt: FileFormat) -> str:
     b = oechem.OEWriteMolToBytes(mol, fmt.oeformat, fmt.gzip)  # type: bytes
 
     if fmt.is_binary_format or fmt.gzip:
-        return b64encode(b).decode("utf-8")
+        return b64.b64encode(b).decode("utf-8")
 
     return b.decode("utf-8")
 
 
-def molecule_from_string(mol: oechem.OEMolBase, string_or_bytes: str | bytes, fmt: FileFormat) -> bool:
+def molecule_from_string(
+        mol: oechem.OEMolBase,
+        string_or_bytes: str | bytes,
+        fmt: FileFormat,
+        b64decode: bool = False
+) -> bool:
     """
     Convert a molecule from a string representation
     :param mol: OpenEye molecule
     :param string_or_bytes: String or bytes that represent the molecule
     :param fmt: File format
+    :param b64decode: Force base64 decoding of string
     :return: Molecule
     """
     mol.Clear()
@@ -73,7 +79,7 @@ def molecule_from_string(mol: oechem.OEMolBase, string_or_bytes: str | bytes, fm
     if isinstance(string_or_bytes, str):
         string_or_bytes = string_or_bytes.encode("utf-8")
 
-    if fmt.is_binary_format or fmt.gzip:
-        string_or_bytes = b64decode(string_or_bytes)
+    if fmt.is_binary_format or fmt.gzip or b64decode:
+        string_or_bytes = b64.b64decode(string_or_bytes)
 
     return oechem.OEReadMolFromBytes(mol, fmt.oeformat, fmt.gzip, string_or_bytes)

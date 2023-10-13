@@ -3,6 +3,7 @@ import sys
 import csv
 import numpy as np
 import pandas as pd
+import base64 as b64
 from pathlib import Path
 from typing import Callable, Literal, Any, Mapping, Protocol
 from collections.abc import Iterable, Hashable, Sequence, Generator
@@ -180,14 +181,14 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
             astype: type[oechem.OEMolBase] = oechem.OEGraphMol,
             copy: bool = False,
             fmt: int = oechem.OEFormat_SMI,
-            b64=False) -> Self:
+            b64decode: bool = False) -> Self:
         """
         Read molecules form a sequence of strings
         :param strings: Sequence of strings
         :param astype: Data type for molecules (must be oechem.OEMolBase)
         :param copy: Not used (here for API compatibility)
-        :param b64: Gzipped or binary formats are b64 encoded
-        :return:
+        :param b64decode: Force base64 decoding of molecule strings
+        :return: Array of molecules
         """
         if not issubclass(astype, oechem.OEMolBase):
             raise TypeError("Can only read molecules from string as an oechem.OEMolBase type")
@@ -471,18 +472,113 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
     # Conversions
     # --------------------------------------------------------
 
-    def to_smiles(self, flavor=oechem.OESMILESFlag_ISOMERIC):
+    def to_molecule_strings(
+            self,
+            molecule_format: str | int = oechem.OEFormat_SMI,
+            flavor: int | None = None,
+            gzip: bool = False,
+            b64encode: bool = False
+    ) -> np.ndarray:
         """
-        Convert array to SMILES
-        :return:
+        Write molecules to an array of strings.
+
+        Missing or invalid molecules are represented by empty strings. Binary or gzipped formats are automatically
+        base64 encoded so for valid string representations. Note that gzip is automatically inferred if you provide
+        an extension ending in gz.
+
+        :param molecule_format: Molecule format (extension or oechem.OEFormat)
+        :param flavor: Output flavor (None will give the default)
+        :param gzip: Gzip the molecule string (will be base64 encoded)
+        :param b64encode: Force base64 encoding for all molecules
+        :return: Array of molecule strings
         """
+
+        # Get the molecule format
+        fmt = get_oeformat(molecule_format)
+
+        molecule_strings = []
+        for mol in self.mols:
+            if mol is not None and mol.IsValid():
+                # First write to bytes
+                mol_bytes = oechem.OEWriteMolToBytes(
+                    fmt.oeformat,
+                    flavor or oechem.OEGetDefaultOFlavor(fmt.oeformat),
+                    fmt.gzip or gzip,
+                    mol
+                )
+
+                # Convert gzip or binary formats to base64
+                if fmt.gzip or gzip or fmt.is_binary_format or b64encode:
+                    molecule_strings.append(
+                        b64.b64encode(mol_bytes).decode('utf-8')
+                    )
+                else:
+                    molecule_strings.append(
+                        mol_bytes.decode('utf-8')
+                    )
+            else:
+                molecule_strings.append('')
+
+        return np.array(molecule_strings, dtype=str)
+
+    def to_molecule_bytes(
+            self,
+            molecule_format: str | int = oechem.OEFormat_SMI,
+            flavor: int | None = None,
+            gzip: bool = False
+    ) -> np.ndarray:
+        """
+        Write molecules to an array of bytes.
+
+        Invalid or empty molecules are added as an empty bytes string.
+
+        :param molecule_format: Molecule format (extension or oechem.OEFormat)
+        :param flavor: Output flavor (None will give the default flavor)
+        :param gzip: Gzip the molecule bytes
+        :return: Array of molecule bytes
+        """
+
+        # Get the molecule format
+        fmt = get_oeformat(molecule_format)
+
+        molecule_bytes = []
+        for mol in self.mols:
+            if mol is not None and mol.IsValid():
+                # First write to bytes
+                mol_bytes = oechem.OEWriteMolToBytes(
+                    fmt.oeformat,
+                    flavor or oechem.OEGetDefaultOFlavor(fmt.oeformat),
+                    fmt.gzip or gzip,
+                    mol
+                )
+
+                molecule_bytes.append(mol_bytes)
+
+            # None for invalid molecules
+            else:
+                molecule_bytes.append(b'')
+
+        return np.array(molecule_bytes, dtype=bytes)
+
+    def to_smiles(self, flavor: int | None = None) -> np.ndarray:
+        """
+        Convert array to SMILES.
+
+        This is implemented using a more efficient method for SMILES than to_molecule_string. Invalid or missing
+        molecules are represented by empty strings.
+
+        :return: Array of molecule strings.
+        """
+        # Default flavor is canonical isomeric SMILES
+        flavor = flavor or oechem.OESMILESFlag_ISOMERIC
+
         smiles = []
         for mol in self.mols:
             if mol is not None and mol.IsValid():
                 smiles.append(oechem.OECreateSmiString(mol, flavor))
             else:
-                smiles.append(None)
-        return np.array(smiles, dtype=object)
+                smiles.append('')
+        return np.array(smiles, dtype=str)
 
     # --------------------------------------------------------
     # Operators
@@ -1481,6 +1577,87 @@ class WriteToSDFAccessor:
                 # Write out the molecule
                 oechem.OEWriteMolecule(ofs, mol)
 
+
+@register_dataframe_accessor("to_molecule_csv")
+class WriteToMoleculeCSVAccessor:
+    """
+    Write to a CSV file containing molecules
+    """
+    def __init__(self, pandas_obj: pd.DataFrame):
+        self._obj = pandas_obj
+
+    def __call__(
+            self,
+            fp: FilePath,
+            *,
+            molecule_format: str | int = oechem.OEFormat_SMI,
+            flavor: int | None = None,
+            gzip: bool = False,
+            b64encode: bool = False,
+            columns: str | Iterable[str] | None = None,
+            index: bool = True,
+            sep=',',
+            na_rep='',
+            float_format=None,
+            header=True,
+            encoding=None,
+            lineterminator=None,
+            date_format=None,
+            doublequote=True,
+            escapechar=None,
+            decimal='.',
+            index_label: str = "index",
+    ) -> None:
+        """
+
+        :param fp:
+        :param molecule_format:
+        :param columns:
+        :param index:
+        :param sep:
+        :param na_rep:
+        :param float_format:
+        :param header:
+        :param encoding:
+        :param lineterminator:
+        :param date_format:
+        :param doublequote:
+        :param escapechar:
+        :param decimal:
+        :param index_label:
+        :return:
+        """
+        # Get the molecule format for the molecule columns
+        fmt = get_oeformat(molecule_format)
+
+        # Convert all the molecule columns
+        for col in self._obj.columns:
+            if isinstance(self._obj.dtypes[col], MoleculeDtype):
+                self._obj[col] = self._obj[col].array.to_molecule_strings(
+                    molecule_format=fmt.oeformat,
+                    flavor=flavor,
+                    gzip=gzip or fmt.gzip,
+                    b64encode=b64encode or fmt.is_binary_format or fmt.gzip
+                )
+
+        # Write to CSV
+        self._obj.to_csv(
+            fp,
+            sep=sep,
+            na_rep=na_rep,
+            float_format=float_format,
+            columns=columns,
+            header=header,
+            index=index,
+            index_label=index_label,
+            lineterminator=lineterminator,
+            encoding=encoding,
+            date_format=date_format,
+            doublequote=doublequote,
+            escapechar=escapechar,
+            decimal=decimal
+        )
+
 # def to_sdf(
 #         self: pd.DataFrame,
 #         x):
@@ -1641,12 +1818,93 @@ class SeriesAsMoleculeAccessor:
 
         # noinspection PyProtectedMember
         arr = MoleculeArray._from_sequence_of_strings(self._obj, astype=astype, fmt=_fmt.oeformat)
-        return pd.Series(arr, index=self._obj.index)
+        return pd.Series(arr, index=self._obj.index, dtype=MoleculeDtype())
+
+
+@register_series_accessor("to_molecule_bytes")
+class SeriesToMoleculeBytesAccessor:
+    def __init__(self, pandas_obj):
+        if not isinstance(pandas_obj.dtype, MoleculeDtype):
+            raise TypeError(
+                "to_molecule_bytes only works on molecule columns (oepandas.MoleculeDtype). If this column has "
+                "molecules, use pd.Series.as_molecule to convert to a molecule column first."
+            )
+
+        self._obj = pandas_obj
+
+    def __call__(
+            self,
+            *,
+            molecule_format: str | int = oechem.OEFormat_SMI,
+            flavor: int | None = None,
+            gzip: bool = False,
+    ) -> pd.Series:
+        """
+        Convert a series to molecule bytes
+        :param molecule_format: Molecule format extension or oechem.OEFormat
+        :param flavor: Flavor for generating SMILES (bitmask from oechem.OESMILESFlag)
+        :param gzip: Gzip the molecule bytes
+        :return: Series of molecules as SMILES
+        """
+        fmt = get_oeformat(molecule_format)
+
+        arr = self._obj.array.to_molecule_bytes(
+            molecule_format=fmt.oeformat,
+            flavor=flavor,
+            gzip=gzip or fmt.gzip,
+        )
+
+        return pd.Series(arr, index=self._obj.index, dtype=object)
+
+
+@register_series_accessor("to_molecule_strings")
+class SeriesToMoleculeStringsAccessor:
+    def __init__(self, pandas_obj):
+        if not isinstance(pandas_obj.dtype, MoleculeDtype):
+            raise TypeError(
+                "to_molecule_string only works on molecule columns (oepandas.MoleculeDtype). If this column has "
+                "molecules, use pd.Series.as_molecule to convert to a molecule column first."
+            )
+
+        self._obj = pandas_obj
+
+    def __call__(
+            self,
+            *,
+            molecule_format: str | int = oechem.OEFormat_SMI,
+            flavor: int | None = None,
+            gzip: bool = False,
+            b64encode: bool = False
+    ) -> pd.Series:
+        """
+        Convert a series to molecule strings
+        :param molecule_format: Molecule format extension or oechem.OEFormat
+        :param flavor: Flavor for generating SMILES (bitmask from oechem.OESMILESFlag)
+        :param gzip: Gzip the molecule strings (will be base64 encoded)
+        :param b64encode: Force base64 encoding for all molecules
+        :return: Series of molecules as SMILES
+        """
+        fmt = get_oeformat(molecule_format)
+
+        arr = self._obj.array.to_molecule_strings(
+            molecule_format=fmt.oeformat,
+            flavor=flavor,
+            gzip=gzip or fmt.gzip,
+            b64encode=b64encode or fmt.is_binary_format or fmt.gzip
+        )
+
+        return pd.Series(arr, index=self._obj.index, dtype=object)
 
 
 @register_series_accessor("to_smiles")
 class SeriesToSmilesAccessor:
-    def __init__(self, pandas_obj):
+    def __init__(self, pandas_obj: pd.Series):
+        if not isinstance(pandas_obj.dtype, MoleculeDtype):
+            raise TypeError(
+                "to_smiles only works on molecule columns (oepandas.MoleculeDtype). If this column has "
+                "molecules, use pd.Series.as_molecule to convert to a molecule column first."
+            )
+
         self._obj = pandas_obj
 
     def __call__(
@@ -1659,5 +1917,6 @@ class SeriesToSmilesAccessor:
         :param flavor: Flavor for generating SMILES (bitmask from oechem.OESMILESFlag)
         :return: Series of molecules as SMILES
         """
+        # noinspection PyUnresolvedReferences
         arr = self._obj.array.to_smiles(flavor)
-        return pd.Series(arr, index=self._obj.index, dtype=str)
+        return pd.Series(arr, index=self._obj.index, dtype=object)

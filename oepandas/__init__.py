@@ -11,9 +11,19 @@ from .molecule import (
 )
 
 
-__version__ = '0.2.0'
+__version__ = '0.2.1'
 
-__all__ = ["exception", "molecule", "util"]
+__all__ = [
+    "exception",
+    "molecule",
+    "util",
+    "MoleculeDtype",
+    "MoleculeArray",
+    "read_sdf",
+    "read_oeb",
+    "read_smi",
+    "read_molecule_csv"
+]
 
 
 ########################################################################################################################
