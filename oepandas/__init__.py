@@ -7,11 +7,12 @@ from .molecule import (
     read_molecule_csv,
     read_smi,
     read_sdf,
-    read_oeb
+    read_oeb,
+    read_oedb
 )
 
 
-__version__ = '0.2.1'
+__version__ = '0.2.2'
 
 __all__ = [
     "exception",
@@ -22,7 +23,8 @@ __all__ = [
     "read_sdf",
     "read_oeb",
     "read_smi",
-    "read_molecule_csv"
+    "read_molecule_csv",
+    "read_oedb"
 ]
 
 

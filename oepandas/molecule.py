@@ -397,8 +397,6 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
         """
         return cls(_read_molecule_file(fp, oechem.OEFormat_SMI, flavor=flavor, astype=astype))
 
-    # TODO: from_oez?
-
     def tolist(self, copy=False) -> list[oechem.OEMolBase]:
         """
         Convert to a list
@@ -1471,6 +1469,101 @@ def read_oeb(
     )
 
 
+def read_oedb(
+    filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
+    *,
+    usecols: None | str | Iterable[str] = None,
+    int_na: int | None = None,
+) -> pd.DataFrame:
+    data = {}
+
+    # Open the record file
+    ifs = oechem.oeifstream()
+    ifs.open(str(filepath_or_buffer))
+
+    # Read the records
+    for idx, record in enumerate(oechem.OEReadRecords(ifs)):  # type: oechem.OERecord
+        for field in record.get_fields():  # type: oechem.OEFieldBase
+            name = field.get_name()
+            # noinspection PyUnresolvedReferences
+            dtype = field.get_type()
+
+            # ------------------------------
+            # Float field
+            # ------------------------------
+            if dtype == oechem.Types.Float:
+                if name not in data:
+                    data[name] = Column(name, dtype=float)
+
+                val = record.get_value(field)
+                data[name].data.append(val if isinstance(val, float) else np.nan)
+                data[name].index.append(idx)
+
+            # ------------------------------
+            # Integer field
+            # ------------------------------
+            elif dtype == oechem.Types.Int:
+                if name not in data:
+                    data[name] = Column(name, dtype=int)
+
+                val = record.get_value(field)
+                if not isinstance(val, int):
+                    if int_na is None:
+                        data[name].dtype = object
+                        data[name].data.append(None)
+                    else:
+                        data[name].data.append(int_na)
+                else:
+                    data[name].data.append(val)
+
+                data[name].index.append(idx)
+
+            # ------------------------------
+            # Boolean field
+            # ------------------------------
+            elif dtype == oechem.Types.Bool:
+                if name not in data:
+                    data[name] = Column(name, dtype=bool)
+
+                val = record.get_value(field)
+                if not isinstance(val, bool):
+                    data[name].dtype = object
+                    data[name].data.append(None)
+                else:
+                    data[name].data.append(val)
+
+                data[name].index.append(idx)
+
+            # ------------------------------
+            # Molecule field
+            # ------------------------------
+            elif dtype == oechem.Types.Chem.Mol:
+                if name not in data:
+                    data[name] = Column(name, dtype=MoleculeDtype())
+
+                val = record.get_value(field)
+                data[name].data.append(val if isinstance(val, oechem.OEMolBase) else None)
+                data[name].index.append(idx)
+
+            # ------------------------------
+            # Everything else
+            # ------------------------------
+            else:
+                if name not in data:
+                    data[name] = Column(name, dtype=object)
+
+                val = record.get_value(field)
+                data[name].data.append(val)
+                data[name].index.append(idx)
+
+    # Close the record file
+    ifs.close()
+
+    # Create the DataFrame
+    df = pd.DataFrame(dict(col.to_series_tuple() for col in data.values()))
+    return df
+
+
 # ----------------------------------------------------------------------
 # Monkey patch these into Pandas, which makes them discoverable to
 # people looking there and not in the oepandas package
@@ -1480,7 +1573,7 @@ pd.read_molecule_csv = read_molecule_csv
 pd.read_smi = read_smi
 pd.read_sdf = read_sdf
 pd.read_oeb = read_oeb
-# pd.read_oez = read_oez
+pd.read_oedb = read_oedb
 
 
 ########################################################################################################################
@@ -1584,7 +1677,7 @@ class WriteToMoleculeCSVAccessor:
     Write to a CSV file containing molecules
     """
     def __init__(self, pandas_obj: pd.DataFrame):
-        self._obj = pandas_obj
+        self._obj = pandas_obj.copy()
 
     def __call__(
             self,
@@ -1603,29 +1696,32 @@ class WriteToMoleculeCSVAccessor:
             encoding=None,
             lineterminator=None,
             date_format=None,
+            quoting=None,
+            quotechar='"',
             doublequote=True,
             escapechar=None,
             decimal='.',
             index_label: str = "index",
     ) -> None:
         """
-
-        :param fp:
-        :param molecule_format:
-        :param columns:
-        :param index:
-        :param sep:
-        :param na_rep:
-        :param float_format:
-        :param header:
-        :param encoding:
-        :param lineterminator:
-        :param date_format:
-        :param doublequote:
-        :param escapechar:
-        :param decimal:
-        :param index_label:
-        :return:
+        Write to a CSV file with molecules
+        :param fp: File path
+        :param molecule_format: Molecule file format
+        :param columns: Columns to include in the output CSV
+        :param index: Whether to write the index
+        :param sep: String of length 1. Field delimiter for the output file
+        :param na_rep: Missing data representation
+        :param float_format: Format string for floating point numbers
+        :param header: Write out the column names. A list of strings is assumed to be aliases for the column names.
+        :param encoding: A string representing the encoding to use in the output file ('utf-8' is default)
+        :param lineterminator: Newline character or character sequence to use. Default is system dependent.
+        :param date_format: Format string for datetime objects.
+        :param quoting: Defaults to csv.QUOTE_MINIMAL
+        :param quotechar: String of length 1. Character used to quote fields.
+        :param doublequote: Control quoting of quotechar inside a field.
+        :param escapechar: String of length 1. Character used to escape sep and quotechar when appropriate.
+        :param decimal: Character recognized as decimal separator. E.g., use ‘,’ for European data.
+        :param index_label: Column label to use for the index
         """
         # Get the molecule format for the molecule columns
         fmt = get_oeformat(molecule_format)

@@ -85,10 +85,7 @@ class TestMoleculeArray(unittest.TestCase):
             {"Title": x[1].GetTitle(), "MOL": x[1]},
         ])
         df["MOL"] = df.MOL.astype(MoleculeDtype())
-
-        print(df.filter_invalid_molecules("MOL"))
-
-        # self.assertEqual(2, len(df.filter_invalid_molecules("MOL")))
+        self.assertEqual(2, len(df.filter_invalid_molecules("MOL")))
 
     def test_regression_as_molecule_formatter_axis_error(self):
         """
@@ -526,3 +523,15 @@ class TestMoleculeArray(unittest.TestCase):
                 [b.rstrip(b'\x00') for b in expected_bytes],
                 df.TEST.tolist()
             )
+
+    def test_read_oedb(self):
+        """
+        Read data records
+        """
+        df = oepd.read_oedb(Path(ASSETS, "10.oedb"))
+        self.assertIn("MolWt Halide Fraction (Calculated)", df.columns)
+        self.assertIn("Heavy Atom Count (Calculated)", df.columns)
+        self.assertIn("Molecule", df.columns)
+        self.assertEqual(df.dtypes["MolWt Halide Fraction (Calculated)"], float)
+        self.assertEqual(df.dtypes["Heavy Atom Count (Calculated)"], int)
+        self.assertIsInstance(df.dtypes["Molecule"], oepd.MoleculeDtype)
