@@ -3,7 +3,6 @@ import sys
 import csv
 import numpy as np
 import pandas as pd
-import base64 as b64
 from pathlib import Path
 from typing import Callable, Literal, Any, Mapping, Protocol
 from collections.abc import Iterable, Hashable, Sequence, Generator
@@ -32,7 +31,8 @@ from pandas._typing import (
 )
 from openeye import oechem
 from copy import copy as shallow_copy
-from .util import get_oeformat, molecule_from_string, molecule_to_string
+from .util import get_oeformat, molecule_from_string, create_molecule_to_string_writer
+from .exception import FileError
 
 if sys.version_info >= (3, 11):
     from typing import Self  # pyright: ignore[reportUnusedImport]
@@ -472,7 +472,7 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
 
     def to_molecule_strings(
             self,
-            molecule_format: str | int = oechem.OEFormat_SMI,
+            molecule_format: str | int = "smiles",
             flavor: int | None = None,
             gzip: bool = False,
             b64encode: bool = False
@@ -484,36 +484,27 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
         base64 encoded so for valid string representations. Note that gzip is automatically inferred if you provide
         an extension ending in gz.
 
+        Note that excess newlines are stripped form the strings.
+
         :param molecule_format: Molecule format (extension or oechem.OEFormat)
         :param flavor: Output flavor (None will give the default)
         :param gzip: Gzip the molecule string (will be base64 encoded)
         :param b64encode: Force base64 encoding for all molecules
         :return: Array of molecule strings
         """
-
-        # Get the molecule format
-        fmt = get_oeformat(molecule_format)
+        # Create the function that will convert molecules to strings
+        molecule_to_string = create_molecule_to_string_writer(
+            fmt=molecule_format,
+            flavor=flavor,
+            gzip=gzip,
+            b64encode=b64encode,
+            strip=True
+        )
 
         molecule_strings = []
         for mol in self.mols:
             if mol is not None and mol.IsValid():
-                # First write to bytes
-                mol_bytes = oechem.OEWriteMolToBytes(
-                    fmt.oeformat,
-                    flavor or oechem.OEGetDefaultOFlavor(fmt.oeformat),
-                    fmt.gzip or gzip,
-                    mol
-                )
-
-                # Convert gzip or binary formats to base64
-                if fmt.gzip or gzip or fmt.is_binary_format or b64encode:
-                    molecule_strings.append(
-                        b64.b64encode(mol_bytes).decode('utf-8')
-                    )
-                else:
-                    molecule_strings.append(
-                        mol_bytes.decode('utf-8')
-                    )
+                molecule_strings.append(molecule_to_string(mol))
             else:
                 molecule_strings.append('')
 
@@ -1479,7 +1470,8 @@ def read_oedb(
 
     # Open the record file
     ifs = oechem.oeifstream()
-    ifs.open(str(filepath_or_buffer))
+    if not ifs.open(str(filepath_or_buffer)):
+        raise FileError(f'Could not open file for reading: {filepath_or_buffer}')
 
     # Read the records
     for idx, record in enumerate(oechem.OEReadRecords(ifs)):  # type: oechem.OERecord
@@ -1487,6 +1479,10 @@ def read_oedb(
             name = field.get_name()
             # noinspection PyUnresolvedReferences
             dtype = field.get_type()
+
+            # Skip columns we weren't asked to read (if provided)
+            if usecols is not None and name not in usecols:
+                continue
 
             # ------------------------------
             # Float field
@@ -1598,7 +1594,8 @@ class WriteToSDFAccessor:
             columns: str | Iterable[str] | None = None,
             index: bool = True,
             index_tag: str = "index",
-            secondary_molecules_as: int | str = oechem.OEFormat_SMI
+            secondary_molecules_as: int | str = "smiles",
+            secondary_molecule_flavor: int | str | None = None
     ) -> None:
         """
         Write DataFrame to an SD file
@@ -1631,6 +1628,15 @@ class WriteToSDFAccessor:
         # Set of secondary molecule columns
         secondary_molecule_cols = set()
 
+        # Create the secondary molecule writer
+        secondary_molecule_to_string = create_molecule_to_string_writer(
+            fmt=secondary_molecules_as,
+            flavor=secondary_molecule_flavor,
+            gzip=False,
+            b64encode=False,
+            strip=True
+        )
+
         for col in columns:
             if col not in self._obj.columns:
                 raise KeyError(f'Column {col} not found in DataFrame')
@@ -1638,9 +1644,7 @@ class WriteToSDFAccessor:
             if col != primary_molecule_column and isinstance(self._obj[col].dtype, MoleculeDtype):
                 secondary_molecule_cols.add(col)
 
-        # Get the secondary molecule format
-        secondary_fmt = get_oeformat(secondary_molecules_as)
-
+        # Process the molecules
         with oechem.oemolostream(str(fp)) as ofs:
             for idx, row in self._obj.iterrows():
                 mol = row[primary_molecule_column].CreateCopy()
@@ -1656,7 +1660,7 @@ class WriteToSDFAccessor:
                         oechem.OESetSDData(
                             mol,
                             col,
-                            molecule_to_string(row[col], secondary_fmt)
+                            secondary_molecule_to_string(row[col])
                         )
 
                     # Everything else (except our primary molecule column)
@@ -1967,7 +1971,7 @@ class SeriesToMoleculeStringsAccessor:
     def __call__(
             self,
             *,
-            molecule_format: str | int = oechem.OEFormat_SMI,
+            molecule_format: str | int = "smiles",
             flavor: int | None = None,
             gzip: bool = False,
             b64encode: bool = False

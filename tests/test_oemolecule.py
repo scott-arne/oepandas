@@ -289,23 +289,14 @@ class TestMoleculeArray(unittest.TestCase):
 
         # We expect the molecules to have these SMILES strings
         expected_strings = [
-            oechem.OEWriteMolToBytes(
-                oechem.OEFormat_SMI,
-                oechem.OEGetDefaultOFlavor(oechem.OEFormat_SMI),
-                False,
-                x[0]
-            ).decode('utf-8'),
+            oechem.OEMolToSmiles(x[0]),
             '',
-            oechem.OEWriteMolToBytes(
-                oechem.OEFormat_SMI,
-                oechem.OEGetDefaultOFlavor(oechem.OEFormat_SMI),
-                False,
-                x[1]
-            ).decode('utf-8'),
+            oechem.OEMolToSmiles(x[1])
         ]
 
         with self.subTest("Canonical isomeric SMILES"):
-            df["TEST"] = df.MOL.to_molecule_strings(molecule_format=oechem.OEFormat_SMI)
+            df["TEST"] = df.MOL.to_molecule_strings(molecule_format="smiles")
+            print(df)
             self.assertListEqual(
                 expected_strings,
                 df.TEST.tolist()
@@ -535,3 +526,14 @@ class TestMoleculeArray(unittest.TestCase):
         self.assertEqual(df.dtypes["MolWt Halide Fraction (Calculated)"], float)
         self.assertEqual(df.dtypes["Heavy Atom Count (Calculated)"], int)
         self.assertIsInstance(df.dtypes["Molecule"], oepd.MoleculeDtype)
+
+    def test_to_molecule_csv(self):
+        x = MoleculeArray.read_smi(Path(ASSETS, "10.smi"))
+        df = pd.DataFrame([
+            {"Title": x[0].GetTitle(), "MOL": x[0]},
+            {"Title": "Invalid", "MOL": oechem.OEMol()},
+            {"Title": x[1].GetTitle(), "MOL": x[1]},
+        ])
+        df["MOL"] = df.MOL.astype(MoleculeDtype())
+
+        df.to_molecule_csv("test-molecule-csv.csv")

@@ -1,5 +1,6 @@
 import logging
 import base64 as b64
+from typing import Callable
 from openeye import oechem
 from dataclasses import dataclass
 from .exception import UnsupportedFileFormat
@@ -45,19 +46,67 @@ def get_oeformat(ext_or_oeformat: int | str, gzip: bool = False) -> FileFormat:
     raise TypeError(f'Cannot get OEFormat from {ext_or_oeformat} of type {type(ext_or_oeformat).__name__}')
 
 
-def molecule_to_string(mol: oechem.OEMolBase, fmt: FileFormat) -> str:
+def create_molecule_to_string_writer(
+        fmt: str | int | FileFormat = "smiles",
+        flavor: int = None,
+        gzip: bool = False,
+        b64encode: bool = False,
+        strip: bool = True
+) -> Callable[[oechem.OEMolBase], str]:
     """
-    Convert a molecule to a string representation
-    :param mol: OpenEye molecule
-    :param fmt: File format
-    :return: Molecule as string
+    Create a writer that takes a molecule and writes it to a string.
+
+    Note that "smiles", "canonical smiles" and "canonical_smiles" all have a special meaning and use the
+    oechem.OEMolToSmiles function to create a canonical isomeric SMILES that does not contain the title. If using
+    fmt=oechem.OEFormatSMI or fmt=".smi" or fmt=".ism" then you will get SMILES with titles.
+
+    :param fmt: Molecule file format (string, oehem.OEFormat or oepandas FileFormat)
+    :param flavor: Molecule flavor
+    :param gzip: Gzip the molecule (forces b64 encoding)
+    :param b64encode: Force b64 encoding of the molecule
+    :param strip: Strip newlines
+    :return: Writer that takes a molecule and returns a string
     """
-    b = oechem.OEWriteMolToBytes(mol, fmt.oeformat, fmt.gzip)  # type: bytes
+    if isinstance(fmt, str):
+        if fmt in ("smiles", "canonical smiles", "canonical_smiles"):
 
-    if fmt.is_binary_format or fmt.gzip:
-        return b64.b64encode(b).decode("utf-8")
+            def molecule_to_string(m: oechem.OEMolBase):
+                """
+                Provides access to a simpler version of a SMILES writer that does not add the title
+                """
+                return oechem.OEMolToSmiles(m)
 
-    return b.decode("utf-8")
+            return molecule_to_string
+
+    elif isinstance(fmt, (str, int)):
+        # Get the molecule format
+        fmt = get_oeformat(fmt)
+
+    if isinstance(fmt, FileFormat):
+
+        def molecule_to_string(m: oechem.OEMolBase):
+            """
+            Write to standard molecule formats
+            """
+            # First write to bytes
+            mol_bytes = oechem.OEWriteMolToBytes(
+                fmt.oeformat,
+                flavor or oechem.OEGetDefaultOFlavor(fmt.oeformat),
+                fmt.gzip or gzip,
+                m
+            )
+
+            # Convert gzip or binary formats to base64
+            if fmt.gzip or gzip or fmt.is_binary_format or b64encode:
+                retval = b64.b64encode(mol_bytes).decode('utf-8')
+            else:
+                retval = mol_bytes.decode('utf-8')
+
+            return retval.strip() if strip else retval
+
+        return molecule_to_string
+
+    raise TypeError(f'Cannot create a molecule_to_string writer from: {fmt}')
 
 
 def molecule_from_string(
