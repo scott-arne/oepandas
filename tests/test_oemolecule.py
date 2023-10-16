@@ -361,7 +361,7 @@ class TestMoleculeArray(unittest.TestCase):
                     True,
                     x[0]
                 )
-            ).decode('utf-8'),
+            ).decode('utf-8').strip(),
             '',
             b64.b64encode(
                 oechem.OEWriteMolToBytes(
@@ -370,7 +370,7 @@ class TestMoleculeArray(unittest.TestCase):
                     True,
                     x[1]
                 )
-            ).decode('utf-8'),
+            ).decode('utf-8').strip(),
         ]
 
         with self.subTest("SDF v3000 gzipped"):

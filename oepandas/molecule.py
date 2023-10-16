@@ -1687,7 +1687,7 @@ class WriteToMoleculeCSVAccessor:
             self,
             fp: FilePath,
             *,
-            molecule_format: str | int = oechem.OEFormat_SMI,
+            molecule_format: str | int = "smiles",
             flavor: int | None = None,
             gzip: bool = False,
             b64encode: bool = False,
@@ -1727,17 +1727,14 @@ class WriteToMoleculeCSVAccessor:
         :param decimal: Character recognized as decimal separator. E.g., use ‘,’ for European data.
         :param index_label: Column label to use for the index
         """
-        # Get the molecule format for the molecule columns
-        fmt = get_oeformat(molecule_format)
-
         # Convert all the molecule columns
         for col in self._obj.columns:
             if isinstance(self._obj.dtypes[col], MoleculeDtype):
                 self._obj[col] = self._obj[col].array.to_molecule_strings(
-                    molecule_format=fmt.oeformat,
+                    molecule_format=molecule_format,
                     flavor=flavor,
-                    gzip=gzip or fmt.gzip,
-                    b64encode=b64encode or fmt.is_binary_format or fmt.gzip
+                    gzip=gzip,
+                    b64encode=b64encode
                 )
 
         # Write to CSV
@@ -1984,13 +1981,11 @@ class SeriesToMoleculeStringsAccessor:
         :param b64encode: Force base64 encoding for all molecules
         :return: Series of molecules as SMILES
         """
-        fmt = get_oeformat(molecule_format)
-
         arr = self._obj.array.to_molecule_strings(
-            molecule_format=fmt.oeformat,
+            molecule_format=molecule_format,
             flavor=flavor,
-            gzip=gzip or fmt.gzip,
-            b64encode=b64encode or fmt.is_binary_format or fmt.gzip
+            gzip=gzip,
+            b64encode=b64encode
         )
 
         return pd.Series(arr, index=self._obj.index, dtype=object)
