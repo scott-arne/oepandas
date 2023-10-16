@@ -313,14 +313,14 @@ class TestMoleculeArray(unittest.TestCase):
                 oechem.OEGetDefaultOFlavor(oechem.OEFormat_SDF) | oechem.OEOFlavor_SDF_MV30,
                 False,
                 x[0]
-            ).decode('utf-8'),
+            ).decode('utf-8').strip(),
             '',
             oechem.OEWriteMolToBytes(
                 oechem.OEFormat_SDF,
                 oechem.OEGetDefaultOFlavor(oechem.OEFormat_SDF) | oechem.OEOFlavor_SDF_MV30,
                 False,
                 x[1]
-            ).decode('utf-8'),
+            ).decode('utf-8').strip(),
         ]
 
         with self.subTest("SDF v3000"):
@@ -337,6 +337,27 @@ class TestMoleculeArray(unittest.TestCase):
         # SDF v3000 b64 encoded
         # ----------------------------------------------
 
+        # We expect the molecules to have these SMILES strings
+        expected_strings = [
+            b64.b64encode(
+                oechem.OEWriteMolToBytes(
+                    oechem.OEFormat_SDF,
+                    oechem.OEGetDefaultOFlavor(oechem.OEFormat_SDF) | oechem.OEOFlavor_SDF_MV30,
+                    False,
+                    x[0]
+                )
+            ).decode('utf-8').strip(),
+            '',
+            b64.b64encode(
+                oechem.OEWriteMolToBytes(
+                    oechem.OEFormat_SDF,
+                    oechem.OEGetDefaultOFlavor(oechem.OEFormat_SDF) | oechem.OEOFlavor_SDF_MV30,
+                    False,
+                    x[1]
+                )
+            ).decode('utf-8').strip(),
+        ]
+
         with self.subTest("SDF v3000 with forced b64 encoding"):
             df["TEST"] = df.MOL.to_molecule_strings(
                 molecule_format=oechem.OEFormat_SDF,
@@ -344,7 +365,7 @@ class TestMoleculeArray(unittest.TestCase):
                 b64encode=True
             )
             self.assertListEqual(
-                list(map(lambda x: b64.b64encode(x.encode('utf-8')).decode('utf-8'), expected_strings)),
+                expected_strings,
                 df.TEST.tolist()
             )
 

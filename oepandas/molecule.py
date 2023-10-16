@@ -31,7 +31,7 @@ from pandas._typing import (
 )
 from openeye import oechem
 from copy import copy as shallow_copy
-from .util import get_oeformat, molecule_from_string, create_molecule_to_string_writer
+from .util import get_oeformat, molecule_from_string, create_molecule_to_string_writer, create_molecule_to_bytes_writer
 from .exception import FileError
 
 if sys.version_info >= (3, 11):
@@ -528,20 +528,12 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
         """
 
         # Get the molecule format
-        fmt = get_oeformat(molecule_format)
+        to_molecule_bytes = create_molecule_to_bytes_writer(molecule_format, flavor, gzip)
 
         molecule_bytes = []
         for mol in self.mols:
             if mol is not None and mol.IsValid():
-                # First write to bytes
-                mol_bytes = oechem.OEWriteMolToBytes(
-                    fmt.oeformat,
-                    flavor or oechem.OEGetDefaultOFlavor(fmt.oeformat),
-                    fmt.gzip or gzip,
-                    mol
-                )
-
-                molecule_bytes.append(mol_bytes)
+                molecule_bytes.append(to_molecule_bytes(mol))
 
             # None for invalid molecules
             else:
@@ -973,11 +965,9 @@ def _read_file_with_data(
 
                             # Can value ever be None/null in the toolkits?
                             if value is not None:
-                                print("FOUND", tag, "with type", type(value))
                                 generic_data[tag] = Column(tag, dtype=type(value))
 
                         except Exception as ex:  # noqa
-                            print(str(ex))
                             continue
 
     # ----------------------------------------------------------------------
@@ -1943,12 +1933,10 @@ class SeriesToMoleculeBytesAccessor:
         :param gzip: Gzip the molecule bytes
         :return: Series of molecules as SMILES
         """
-        fmt = get_oeformat(molecule_format)
-
         arr = self._obj.array.to_molecule_bytes(
-            molecule_format=fmt.oeformat,
+            molecule_format=molecule_format,
             flavor=flavor,
-            gzip=gzip or fmt.gzip,
+            gzip=gzip
         )
 
         return pd.Series(arr, index=self._obj.index, dtype=object)

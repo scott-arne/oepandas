@@ -77,9 +77,9 @@ def create_molecule_to_bytes_writer(
                     return base64.b64encode(python_gzip.compress(retval.encode('utf-8')))
                 return retval
 
-            return molecule_to_string
+            return molecule_to_bytes
 
-    elif isinstance(fmt, (str, int)):
+    if isinstance(fmt, (str, int)):
         # Get the molecule format
         fmt = get_oeformat(fmt)
 
@@ -134,11 +134,11 @@ def create_molecule_to_string_writer(
                     retval = base64.b64encode(python_gzip.compress(retval.encode('utf-8'))).decode('utf-8')
                 if b64encode:
                     retval = base64.b64encode(retval.encode('utf-8')).decode('utf-8')
-                return  retval
+                return retval
 
             return molecule_to_string
 
-    elif isinstance(fmt, (str, int)):
+    if isinstance(fmt, (str, int)):
         # Get the molecule format
         fmt = get_oeformat(fmt)
 
