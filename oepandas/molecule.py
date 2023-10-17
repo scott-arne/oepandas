@@ -130,14 +130,18 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
     """
     Custom extension for an array of molecules
     """
-    def __init__(self, mols, copy=False):
+    def __init__(self, mols: oechem.OEMolBase | Iterable[oechem.OEMolBase], copy=False):
         """
         Initialize
         :param mols: Sequence/array of molecules
-        :type mols: Iterable[oechem.OEMolBase]
         :param copy: Create copy of the molecules if True
         """
-        self.mols = np.array([mol.CreateCopy() if copy else mol for mol in mols])
+        if isinstance(mols, Iterable):
+            self.mols = np.array([mol.CreateCopy() if copy else mol for mol in mols])
+        elif isinstance(mols, oechem.OEMolBase):
+            self.mols = np.array([mols.CreateCopy()] if copy else [mols])
+        else:
+            raise TypeError(f'Cannot create MoleculeArray from {type(mols).__name__}')
 
     @classmethod
     def _from_sequence(cls, scalars: Iterable[Any], *, dtype=None, copy=False,
