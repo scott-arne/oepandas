@@ -32,7 +32,7 @@ from pandas._typing import (
 from openeye import oechem
 from copy import copy as shallow_copy
 from .util import get_oeformat, molecule_from_string, create_molecule_to_string_writer, create_molecule_to_bytes_writer
-from .exception import FileError
+from .exception import FileError, InvalidSMARTS
 
 if sys.version_info >= (3, 11):
     from typing import Self  # pyright: ignore[reportUnusedImport]
@@ -463,12 +463,34 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
         """
         return np.array([mol is None for mol in self.mols])
 
-    def valid(self):
+    def valid(self) -> np.ndarray:
         """
         Return a boolean array of whether molecules are valid or invalid
         :return: Boolean array
         """
-        return np.array([mol.IsValid() for mol in self.mols])
+        return np.array([mol.IsValid() for mol in self.mols], dtype=bool)
+
+    # noinspection PyPep8Naming
+    def match(self, smarts: str | oechem.OESubSearch, adjustH: bool = False) -> np.ndarray:
+        """
+        Return a boolean array of whether molecules are a substructure match to a pattern
+        :param smarts: SMARTS pattern or OpenEye subsearch object
+        :param adjustH: Match implicit/explicit hydrogen state between query and target molecule
+        :return: Boolean array
+        """
+        ss = oechem.OESubSearch(smarts) if isinstance(smarts, str) else smarts
+
+        if not ss.IsValid():
+            if isinstance(smarts, str):
+                raise InvalidSMARTS(f'Invalid SMARTS pattern: {smarts}')
+            else:
+                raise InvalidSMARTS("Invalid oechem.OESubSearch object provided to match")
+
+        matches = []
+        for mol in self.mols:
+            oechem.OEPrepareSearch(mol, ss, adjustH)
+            matches.append(ss.SingleMatch(mol))
+        return np.array(matches, dtype=bool)
 
     # --------------------------------------------------------
     # Conversions

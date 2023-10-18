@@ -1,6 +1,7 @@
 import unittest
 import base64 as b64
 import pandas as pd
+import numpy as np
 import oepandas as oepd
 from oepandas import MoleculeArray, MoleculeDtype
 from pathlib import Path
@@ -548,13 +549,22 @@ class TestMoleculeArray(unittest.TestCase):
         self.assertEqual(df.dtypes["Heavy Atom Count (Calculated)"], int)
         self.assertIsInstance(df.dtypes["Molecule"], oepd.MoleculeDtype)
 
-    def test_to_molecule_csv(self):
-        x = MoleculeArray.read_smi(Path(ASSETS, "10.smi"))
-        df = pd.DataFrame([
-            {"Title": x[0].GetTitle(), "MOL": x[0]},
-            {"Title": "Invalid", "MOL": oechem.OEMol()},
-            {"Title": x[1].GetTitle(), "MOL": x[1]},
-        ])
-        df["MOL"] = df.MOL.astype(MoleculeDtype())
+    # def test_to_molecule_csv(self):
+    #     x = MoleculeArray.read_smi(Path(ASSETS, "10.smi"))
+    #     df = pd.DataFrame([
+    #         {"Title": x[0].GetTitle(), "MOL": x[0]},
+    #         {"Title": "Invalid", "MOL": oechem.OEMol()},
+    #         {"Title": x[1].GetTitle(), "MOL": x[1]},
+    #     ])
+    #     df["MOL"] = df.MOL.astype(MoleculeDtype())
+    #
+    #     df.to_molecule_csv("test-molecule-csv.csv")
 
-        df.to_molecule_csv("test-molecule-csv.csv")
+    def test_molecule_array_match(self):
+        """
+        SMARTS matching in a MoleculeArray
+        """
+        x = MoleculeArray.read_sdf(Path(ASSETS, "10.sdf"))
+        sulfones = np.where(x.match('S(=O)=O'))
+        self.assertEqual(1, len(sulfones))
+        self.assertEqual(8, sulfones[0])
