@@ -568,3 +568,12 @@ class TestMoleculeArray(unittest.TestCase):
         sulfones = np.where(x.subsearch('S(=O)=O'))
         self.assertEqual(1, len(sulfones))
         self.assertEqual(8, sulfones[0])
+
+    def test_series_subsearch(self):
+        """
+        SMARTS matching in a Pandas Series
+        """
+        df = oepd.read_sdf(Path(ASSETS, "10.sdf"))
+        view = df[df.Molecule.subsearch("S(=O)=O")]
+        self.assertEqual(1, len(view))
+        self.assertEqual('Omeprazole', view.iloc[0].Title)

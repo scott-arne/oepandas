@@ -471,18 +471,18 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
         return np.array([mol.IsValid() for mol in self.mols], dtype=bool)
 
     # noinspection PyPep8Naming
-    def subsearch(self, smarts: str | oechem.OESubSearch, adjustH: bool = False) -> np.ndarray:
+    def subsearch(self, pattern: str | oechem.OESubSearch, adjustH: bool = False) -> np.ndarray:
         """
         Return a boolean array of whether molecules are a substructure match to a pattern
-        :param smarts: SMARTS pattern or OpenEye subsearch object
+        :param pattern: SMARTS pattern or OpenEye subsearch object
         :param adjustH: Match implicit/explicit hydrogen state between query and target molecule
         :return: Boolean array
         """
-        ss = oechem.OESubSearch(smarts) if isinstance(smarts, str) else smarts
+        ss = oechem.OESubSearch(pattern) if isinstance(pattern, str) else pattern
 
         if not ss.IsValid():
-            if isinstance(smarts, str):
-                raise InvalidSMARTS(f'Invalid SMARTS pattern: {smarts}')
+            if isinstance(pattern, str):
+                raise InvalidSMARTS(f'Invalid SMARTS pattern: {pattern}')
             else:
                 raise InvalidSMARTS("Invalid oechem.OESubSearch object provided to match")
 
@@ -2029,3 +2029,29 @@ class SeriesToSmilesAccessor:
         # noinspection PyUnresolvedReferences
         arr = self._obj.array.to_smiles(flavor)
         return pd.Series(arr, index=self._obj.index, dtype=object)
+
+
+@register_series_accessor("subsearch")
+class SeriesSubsearchAccessor:
+    def __init__(self, pandas_obj):
+        if not isinstance(pandas_obj.dtype, MoleculeDtype):
+            raise TypeError(
+                "subsearch only works on molecule columns (oepandas.MoleculeDtype). If this column has "
+                "molecules, use pd.Series.as_molecule to convert to a molecule column first."
+            )
+
+        self._obj = pandas_obj
+
+    def __call__(
+            self,
+            pattern: str | oechem.OESubSearch,
+            *,
+            adjustH: bool = False  # noqa
+    ):
+        """
+        Perform a substructure search
+        :param pattern: SMARTS pattern or OESubSearch object
+        :param adjustH: Adjust implicit / explicit hydrogens to match query
+        :return: Series as molecule
+        """
+        return pd.Series(self._obj.array.subsearch(pattern, adjustH=adjustH), dtype=bool)
