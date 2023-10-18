@@ -1611,7 +1611,8 @@ class WriteToSDFAccessor:
             index: bool = True,
             index_tag: str = "index",
             secondary_molecules_as: int | str = "smiles",
-            secondary_molecule_flavor: int | str | None = None
+            secondary_molecule_flavor: int | str | None = None,
+            gzip: bool = False
     ) -> None:
         """
         Write DataFrame to an SD file
@@ -1623,6 +1624,9 @@ class WriteToSDFAccessor:
         :param secondary_molecules_as: Encoding for secondary molecules (default: SMILES)
         :return:
         """
+        # Convert to file path
+        fp = Path(fp)
+
         # Make sure we're working with a list of columns
         if columns is None:
             columns = list(self._obj.columns)
@@ -1662,6 +1666,11 @@ class WriteToSDFAccessor:
 
         # Process the molecules
         with oechem.oemolostream(str(fp)) as ofs:
+
+            # Force SD format
+            ofs.SetFormat(oechem.OEFormat_SDF)
+            ofs.Setgz(gzip or fp.name.endswith("gz"))
+
             for idx, row in self._obj.iterrows():
                 mol = row[primary_molecule_column].CreateCopy()
 
@@ -1686,6 +1695,72 @@ class WriteToSDFAccessor:
                             col,
                             str(row[col])
                         )
+
+                # Write out the molecule
+                oechem.OEWriteMolecule(ofs, mol)
+
+
+@register_dataframe_accessor("to_smi")
+class WriteToSmilesAccessor:
+    """
+    Write to SD file
+    """
+
+    def __init__(self, pandas_obj):
+        self._obj = pandas_obj
+
+    def __call__(
+            self,
+            fp: FilePath,
+            primary_molecule_column: str,
+            *,
+            flavor: int | None = None,
+            molecule_format: str | int = oechem.OEFormat_SMI,
+            title_column: str | None = None,
+            gzip: bool = False
+    ) -> None:
+        """
+        Write DataFrame to an SD file
+        Note: Writing conformers not yet supported
+        :param primary_molecule_column: Primary molecule column
+        :param title_column: Optional column to get molecule titles
+        """
+        # Convert to a path
+        fp = Path(fp)
+
+        # Validate molecule format
+        fmt = get_oeformat(
+            molecule_format,
+            gzip or fp.name.endswith("gz")
+        )
+
+        if fmt.oeformat not in (oechem.OEFormat_SMI, oechem.OEFormat_ISM, oechem.OEFormat_CXSMILES,
+                                oechem.OEFormat_USM):
+            raise ValueError("to_smi can only take SMILES formats as a molecule_format")
+
+        # Validate title column
+        if title_column is not None and title_column not in self._obj.columns:
+            raise KeyError(f'Title column {title_column} not found in DataFrame')
+
+        # Validate primary molecule column
+        if primary_molecule_column not in self._obj.columns:
+            raise KeyError(f'Primary molecule column {primary_molecule_column} not found in DataFrame')
+        if not isinstance(self._obj[primary_molecule_column].dtype, MoleculeDtype):
+            raise TypeError(f'Primary molecule column {primary_molecule_column} is not a MoleculeDtype')
+
+        # Process the molecules
+        with oechem.oemolostream(str(fp)) as ofs:
+
+            # Set the output file stream attributes
+            ofs.SetFormat(fmt.oeformat)
+            ofs.Setgz(fmt.gzip)
+
+            for idx, row in self._obj.iterrows():
+                mol = row[primary_molecule_column].CreateCopy()
+
+                # Set the title
+                if title_column is not None:
+                    mol.SetTitle(str(row[title_column]))
 
                 # Write out the molecule
                 oechem.OEWriteMolecule(ofs, mol)
