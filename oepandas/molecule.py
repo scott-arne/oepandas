@@ -471,7 +471,7 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
         return np.array([mol.IsValid() for mol in self.mols], dtype=bool)
 
     # noinspection PyPep8Naming
-    def match(self, smarts: str | oechem.OESubSearch, adjustH: bool = False) -> np.ndarray:
+    def subsearch(self, smarts: str | oechem.OESubSearch, adjustH: bool = False) -> np.ndarray:
         """
         Return a boolean array of whether molecules are a substructure match to a pattern
         :param smarts: SMARTS pattern or OpenEye subsearch object

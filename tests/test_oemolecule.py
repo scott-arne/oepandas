@@ -560,11 +560,11 @@ class TestMoleculeArray(unittest.TestCase):
     #
     #     df.to_molecule_csv("test-molecule-csv.csv")
 
-    def test_molecule_array_match(self):
+    def test_molecule_array_subsearch(self):
         """
         SMARTS matching in a MoleculeArray
         """
         x = MoleculeArray.read_sdf(Path(ASSETS, "10.sdf"))
-        sulfones = np.where(x.match('S(=O)=O'))
+        sulfones = np.where(x.subsearch('S(=O)=O'))
         self.assertEqual(1, len(sulfones))
         self.assertEqual(8, sulfones[0])
