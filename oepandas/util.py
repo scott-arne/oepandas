@@ -2,6 +2,8 @@ import base64
 import logging
 import base64 as b64
 import gzip as python_gzip
+import pandas as pd
+from collections import Counter
 from typing import Callable
 from openeye import oechem
 from dataclasses import dataclass
@@ -190,3 +192,18 @@ def molecule_from_string(
         string_or_bytes = b64.b64decode(string_or_bytes)
 
     return oechem.OEReadMolFromBytes(mol, fmt.oeformat, fmt.gzip, string_or_bytes)
+
+
+def predominant_type(series: pd.Series, sample_size: int = 25) -> None | type:
+    """
+    Look at a random subset off no empty rows and test if they are molecules
+    :param series: Pandas series
+    :param sample_size: Inspect at most this many rows
+    :return: Predominant class found in the DataFrame sample
+    """
+    # Take a random sample of non-empty rows and test if these are molecules
+    members = [type(x) for x in series[series.notnull()].sample(n=min(sample_size, len(series)))]
+    if len(members) > 0:
+        counts = Counter(members)
+        return max(counts, key=counts.get)
+    return None

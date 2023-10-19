@@ -31,7 +31,13 @@ from pandas._typing import (
 )
 from openeye import oechem
 from copy import copy as shallow_copy
-from .util import get_oeformat, molecule_from_string, create_molecule_to_string_writer, create_molecule_to_bytes_writer
+from .util import (
+    get_oeformat,
+    molecule_from_string,
+    create_molecule_to_string_writer,
+    create_molecule_to_bytes_writer,
+    predominant_type
+)
 from .exception import FileError, InvalidSMARTS
 
 if sys.version_info >= (3, 11):
@@ -1980,10 +1986,32 @@ class FilterInvalidMoleculesAccessor:
 
         return self._obj.drop(self._obj[~mask].index)
 
+
+@register_dataframe_accessor("detect_molecule_columns")
+class DataFrameDetectMoleculeColumnsAccessor:
+    def __init__(self, pandas_obj: pd.DataFrame):
+        self._obj = pandas_obj
+
+    def __call__(self, *, sample_size: int = 25) -> None:
+        """
+        Detects molecule columns based on their predominant type and convert them to MoleculeDtype. This works if
+        the columns primarily contain objects that derive from oechem.OEMolBase (all OpenEye molecule objects).
+        :param sample_size: Maximum number of non-null values to sample to determine column type
+        """
+        molecule_columns = []
+
+        for col in self._obj.columns:
+            t = predominant_type(self._obj[col], sample_size=sample_size)
+            if t is not None and issubclass(t, oechem.OEMolBase):
+                molecule_columns.append(col)
+
+        # Convert to molecule columns
+        self._obj.as_molecule(molecule_columns, inplace=True)
+
+
 ########################################################################################################################
 # Pandas Series: Utilities
 ########################################################################################################################
-
 
 @register_series_accessor("as_molecule")
 class SeriesAsMoleculeAccessor:

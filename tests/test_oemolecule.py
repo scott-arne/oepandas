@@ -577,3 +577,20 @@ class TestMoleculeArray(unittest.TestCase):
         view = df[df.Molecule.subsearch("S(=O)=O")]
         self.assertEqual(1, len(view))
         self.assertEqual('Omeprazole', view.iloc[0].Title)
+
+    def test_detect_molecule_columns(self):
+        """
+        Detect molecule columns in a Pandas DataFrame
+        """
+        # Create a dataframe ensuring non-molecule dtypes
+        df = pd.DataFrame({
+            "IsMolecule": pd.Series(MoleculeArray.read_sdf(Path(ASSETS, "10.sdf")).tolist(), dtype=object),
+            "NotMolecule": pd.Series(list(range(10)), dtype=int),
+            "IsAlsoMolecule": pd.Series(MoleculeArray.read_sdf(Path(ASSETS, "10.sdf")).tolist(), dtype=object)
+        })
+
+        # Do detection
+        df.detect_molecule_columns()
+
+        self.assertIsInstance(df.dtypes["IsMolecule"], MoleculeDtype)
+        self.assertIsInstance(df.dtypes["IsAlsoMolecule"], MoleculeDtype)
