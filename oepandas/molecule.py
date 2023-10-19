@@ -168,7 +168,7 @@ class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
         for i, obj in enumerate(scalars):
 
             # Nones are OK
-            if obj is None:
+            if obj is None or pd.isna(obj):
                 mols.append(None)
 
             # Molecule subclasses
