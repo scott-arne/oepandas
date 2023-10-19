@@ -1,0 +1,6 @@
+SMILES,TITLE,MolWt,NumAcceptors,NumDonors
+CC(=O)Oc1ccccc1C(=O)O,Aspirin,180.15742000000003,2,1
+CC(C)Cc1ccc(cc1)C(C)C(=O)O,Ibuprofen,206.28082,1,1
+CC(=O)Nc1ccc(cc1)O,Acetaminophen,151.16256,1,2
+Cn1cnc2c1c(=O)n(c(=O)n2C)C,Caffeine,194.1906,3,0
+CN1c2ccc(cc2C(=NCC1=O)c3ccccc3)Cl,Diazepam,284.7402199999999,2,0

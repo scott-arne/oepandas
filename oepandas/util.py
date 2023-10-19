@@ -3,6 +3,7 @@ import logging
 import base64 as b64
 import gzip as python_gzip
 import pandas as pd
+from pathlib import Path
 from collections import Counter
 from typing import Callable
 from openeye import oechem
@@ -24,15 +25,20 @@ class FileFormat:
         return self.oeformat in {oechem.OEFormat_OEB, oechem.OEFormat_OEZ}
 
 
-def get_oeformat(ext_or_oeformat: int | str, gzip: bool = False) -> FileFormat:
+def get_oeformat(ext_or_oeformat: int | str | Path, gzip: bool = False) -> FileFormat:
     """
     Get the OpenEye file format (from OEFormat)
     :param ext_or_oeformat: Extension or value from the OEFormat namespace
     :param gzip: Override for gzip (useful if ext_or_oeformat is an OEFormat type)
-    :return: OEFormat value
+    :return: File format
     """
+    # Just look at the file name if this was a path object
+    if isinstance(ext_or_oeformat, Path):
+        ext_or_oeformat = ext_or_oeformat.name
+
     if isinstance(ext_or_oeformat, str):
         if (oeformat := oechem.GetFileFormat(ext_or_oeformat)) != oechem.OEFormat_UNDEFINED:
+
             return FileFormat(
                 ext=oechem.OEGetFormatExtension(oeformat).split(',')[0],
                 oeformat=oeformat,
@@ -48,6 +54,30 @@ def get_oeformat(ext_or_oeformat: int | str, gzip: bool = False) -> FileFormat:
             gzip=gzip
         )
     raise TypeError(f'Cannot get OEFormat from {ext_or_oeformat} of type {type(ext_or_oeformat).__name__}')
+
+
+def get_oeformat_from_ext(p: str | Path) -> FileFormat:
+    """
+    Get the OpenEye file format from the extension of a particular file
+    :param p: Path of the file to write
+    :return: File format
+    """
+    # Ensure input is a path
+    p = Path(p)
+    suffix = ''.join(p.suffixes)
+    return get_oeformat(suffix)
+
+
+def is_gz(p: str | Path) -> bool:
+    """
+    Get whether a file is gzipped based on the extension
+    :param p: File path
+    :return: True if the file is gzipped
+    """
+    # Ensure input is a path
+    p = Path(p)
+    suffix = ''.join(p.suffixes)
+    return suffix.endswith("gz")
 
 
 def create_molecule_to_bytes_writer(

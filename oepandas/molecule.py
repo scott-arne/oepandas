@@ -33,6 +33,7 @@ from openeye import oechem
 from copy import copy as shallow_copy
 from .util import (
     get_oeformat,
+    is_gz,
     molecule_from_string,
     create_molecule_to_string_writer,
     create_molecule_to_bytes_writer,
@@ -61,7 +62,8 @@ def _read_molecule_file(
         *,
         flavor: int | None = None,
         astype: type[oechem.OEMolBase] = oechem.OEMol,
-        conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default"
+        conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default",
+        gzip: bool = False
 ) -> Generator[oechem.OEMolBase, None, None]:
     """
     Generator over flavored reading of molecules in a specific file format
@@ -85,9 +87,10 @@ def _read_molecule_file(
     :param file_format: File format (oechem.OEFormat)
     :param flavor: Optional flavor (oechem.OEIFlavor)
     :param astype: OpenEye molecule type to read (oechem.OEMolBase or oechem.OEGraphMol)
+    :param gzip: File is gzipped
     :return: Generator over molecules
     """
-    fmt = get_oeformat(file_format)
+    fmt = get_oeformat(file_format, gzip=gzip or is_gz(fp))
 
     # Conformer test forces OEMol
     if conformer_test != "default":
@@ -1675,7 +1678,7 @@ class WriteToSDFAccessor:
 
             # Force SD format
             ofs.SetFormat(oechem.OEFormat_SDF)
-            ofs.Setgz(gzip or fp.name.endswith("gz"))
+            ofs.Setgz(gzip or is_gz(fp))
 
             for idx, row in self._obj.iterrows():
                 mol = row[primary_molecule_column].CreateCopy()
@@ -1737,7 +1740,7 @@ class WriteToSmilesAccessor:
         # Validate molecule format
         fmt = get_oeformat(
             molecule_format,
-            gzip or fp.name.endswith("gz")
+            gzip or is_gz(fp)
         )
 
         if fmt.oeformat not in (oechem.OEFormat_SMI, oechem.OEFormat_ISM, oechem.OEFormat_CXSMILES,
@@ -1851,35 +1854,6 @@ class WriteToMoleculeCSVAccessor:
             escapechar=escapechar,
             decimal=decimal
         )
-
-# def to_sdf(
-#         self: pd.DataFrame,
-#         x):
-#     print(self, x)
-#
-#
-# def to_oeb(
-#         self: pd.DataFrame,
-#         x):
-#     print(self, x)
-#
-#
-# def to_oez(
-#         self: pd.DataFrame,
-#         x):
-#     print(self, x)
-#
-#
-# def to_oecsv(
-#         sefl: pd.DataFrame,
-#         x):
-#     pass
-#
-#
-# pd.DataFrame.to_sdf = to_sdf
-# pd.DataFrame.to_oeb = to_oeb
-# pd.DataFrame.to_oez = to_oez
-# pd.DataFrame.to_oecsv = to_oecsv
 
 
 ########################################################################################################################
