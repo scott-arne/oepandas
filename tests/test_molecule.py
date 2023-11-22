@@ -594,3 +594,18 @@ class TestMoleculeArray(unittest.TestCase):
 
         self.assertIsInstance(df.dtypes["IsMolecule"], MoleculeDtype)
         self.assertIsInstance(df.dtypes["IsAlsoMolecule"], MoleculeDtype)
+
+
+class TestPandasExtensions(unittest.TestCase):
+    def test_read_sdf(self):
+        df = oepd.read_sdf(Path(ASSETS, "10.sdf"))
+
+        # Calculate molecular weight
+        df["MW"] = df.Molecule.apply(oechem.OECalculateMolecularWeight)
+        self.assertTrue(df.dtypes["MW"], np.floating)
+
+        for _, row in df.iterrows():
+            with self.subTest(f'MW for {row["Title"]}'):
+                self.assertGreater(row["MW"], 100)
+
+        df.to_oedb("testX123.oedb")

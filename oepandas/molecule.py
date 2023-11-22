@@ -15,7 +15,6 @@ from pandas.io.parsers.readers import _c_parser_defaults
 from pandas._libs import lib
 from pandas.api.extensions import (
     ExtensionArray,
-    ExtensionScalarOpsMixin,
     register_extension_dtype,
     register_dataframe_accessor,
     register_series_accessor
@@ -135,7 +134,7 @@ def _read_molecule_file(
 ########################################################################################################################
 
 
-class MoleculeArray(ExtensionScalarOpsMixin, ExtensionArray):
+class MoleculeArray(ExtensionArray):
     """
     Custom extension for an array of molecules
     """
@@ -745,12 +744,15 @@ class MoleculeDtype(PandasExtensionDtype):
     OpenEye molecule datatype for Pandas
     """
 
-    type = oechem.OEMol
+    type: type = oechem.OEMolBase
     name: str = "molecule"
     kind: str = "O"
     base = np.dtype("O")
     isbuiltin = 0
     isnative = 0
+
+    _is_numeric = False
+    _is_boolean = False
 
     @classmethod
     def construct_array_type(cls):
@@ -1486,7 +1488,7 @@ def read_oeb(
 
 
 def read_oedb(
-    filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
+    fp: FilePath,
     *,
     usecols: None | str | Iterable[str] = None,
     int_na: int | None = None,
@@ -1494,9 +1496,14 @@ def read_oedb(
     data = {}
 
     # Open the record file
-    ifs = oechem.oeifstream()
-    if not ifs.open(str(filepath_or_buffer)):
-        raise FileError(f'Could not open file for reading: {filepath_or_buffer}')
+    filename = str(fp) if isinstance(fp, Path) else fp
+
+    if filename.startswith("."):
+        raise FileError("Reading OERecords from STDIN not yet supported")
+    else:
+        ifs = oechem.oeifstream()
+        if not ifs.open(filename):
+            raise FileError(f'Could not open file for reading: {fp}')
 
     # Read the records
     for idx, record in enumerate(oechem.OEReadRecords(ifs)):  # type: oechem.OERecord
@@ -1854,6 +1861,195 @@ class WriteToMoleculeCSVAccessor:
             escapechar=escapechar,
             decimal=decimal
         )
+
+
+_FLOAT_TYPES = (
+    pd.Float32Dtype,
+    pd.Float64Dtype,
+    np.dtypes.Float64DType,
+    np.dtypes.Float32DType,
+    float,
+    np.floating
+)
+
+_INTEGER_TYPES = (
+    pd.Int8Dtype,
+    pd.Int16Dtype,
+    pd.Int32Dtype,
+    pd.Int64Dtype,
+    pd.UInt8Dtype,
+    pd.UInt16Dtype,
+    pd.UInt32Dtype,
+    pd.UInt64Dtype,
+    np.dtypes.IntDType,
+    np.dtypes.Int8DType,
+    np.dtypes.Int16DType,
+    np.dtypes.Int32DType,
+    np.dtypes.Int64DType,
+    np.dtypes.UInt8DType,
+    np.dtypes.UInt16DType,
+    np.dtypes.UInt32DType,
+    np.dtypes.UInt64DType,
+    np.dtypes.ShortDType,
+    np.dtypes.UShortDType,
+    np.integer,
+    int
+)
+
+_BOOLEAN_TYPES = (
+    pd.BooleanDtype,
+    np.dtypes.BoolDType,
+    bool
+)
+
+_STRING_TYPES = (
+    pd.StringDtype,
+    np.dtypes.StrDType,
+    str
+)
+
+_BYTES_TYPES = (
+    np.dtypes.ByteDType,
+    np.dtypes.BytesDType,
+    np.dtypes.UByteDType,
+    bytes
+)
+
+
+@register_dataframe_accessor("to_oedb")
+class WriteToOEDB:
+    """
+    Write to a CSV file containing molecules
+    """
+    def __init__(self, pandas_obj: pd.DataFrame):
+        self._obj = pandas_obj.copy()
+
+    def __call__(
+            self,
+            fp: FilePath,
+            primary_molecule_column: str | None = None,
+            *,
+            title_column: str | None = None,
+            columns: str | Iterable[str] | None = None,
+            index: bool = True,
+            index_label: str = "index",
+            sample_size: int = 25,
+            safe: bool = True
+    ):
+        """
+        Write OERecords
+
+        This will write OEMolRecords if primary_molecule_column is not None. The title_column can be used to
+        optionally add a title to the primary molecule. If include_title is False, then that column will be
+        excluded from the output.
+
+        :param fp: Path to the record file
+        :param columns: Optional column(s) to use
+        :param index: Write an index field if True
+        :param index_label: Name of the index field
+        :param sample_size: Sample size of non-null values if we need to determine a column's type
+        :param safe: Check the type of each value to ensure OEField compatibility before writing
+        :return:
+        """
+        # Validate primary molecule column
+        if primary_molecule_column is not None:
+            if primary_molecule_column not in self._obj.columns:
+                raise KeyError(f'Primary molecule column {primary_molecule_column} not found in DataFrame')
+            if not isinstance(self._obj[primary_molecule_column].dtype, MoleculeDtype):
+                raise TypeError(f'Primary molecule column {primary_molecule_column} is not a MoleculeDtype')
+
+        # Validate title column
+        if title_column is not None and title_column not in self._obj.columns:
+            raise KeyError(f'Title column {title_column} not found in DataFrame')
+
+        # Get the valid field names
+        valid_cols = set(self._obj.columns) if columns is None else set(self._obj.columns).intersection(set(columns))
+        if len(valid_cols) == 0 and primary_molecule_column is None:
+            raise FileError("No data columns to write to output file")
+
+        # Get the correct ordering of those columns
+        cols = [col for col in self._obj.columns if col in valid_cols]
+
+        # Make these fields
+        # We check for field compatibility with field_types as we write the oedb
+        fields = {}
+        field_types = {}
+        for col in cols:
+
+            # Float field
+            if isinstance(self._obj.dtypes[col], _FLOAT_TYPES):
+                fields[col] = oechem.OEField(col, oechem.Types.Float)
+                field_types[col] = _FLOAT_TYPES
+
+            # Integer field
+            elif isinstance(self._obj.dtypes[col], _INTEGER_TYPES):
+                fields[col] = oechem.OEField(col, oechem.Types.Int)
+                field_types[col] = _INTEGER_TYPES
+
+            # Boolean field
+            elif isinstance(self._obj.dtypes[col], _BOOLEAN_TYPES):
+                fields[col] = oechem.OEField(col, oechem.Types.Bool)
+                field_types[col] = _BOOLEAN_TYPES
+
+            # Molecule field
+            elif isinstance(self._obj.dtypes[col], MoleculeDtype):
+                fields[col] = oechem.OEField(col, oechem.Types.Chem.Mol)
+                field_types[col] = oechem.OEMolBase
+
+            # Else we need to look closer before we assign a type
+            else:
+
+                # Get the predominant type in from non-null values
+                t = predominant_type(self._obj[col], sample_size)
+
+                # String field
+                if issubclass(t, _STRING_TYPES):
+                    fields[col] = oechem.OEField(col, oechem.Types.String)
+                    field_types[col] = _STRING_TYPES
+
+                # Bytes field
+                elif issubclass(t, _BYTES_TYPES):
+                    fields[col] = oechem.OEField(col, oechem.Types.Blob)
+                    field_types[col] = _BYTES_TYPES
+
+                # Design unit field
+                elif issubclass(t, oechem.OEDesignUnit):
+                    fields[col] = oechem.OEField(col, oechem.Types.Chem.DesignUnit)
+                    field_types[col] = oechem.OEDesignUnit
+
+                else:
+                    log.warning("Do not know the OEField type that maps to dtype {} in column {}".format(
+                        t.__name__, col))
+
+        # Our record type is based on whether we have a primary molecule
+        record_type = oechem.OEMolRecord if primary_molecule_column is not None else oechem.OERecord
+
+        ofs = oechem.oeofstream()
+        if not ofs.open(str(fp)):
+            raise FileError(f'Could not open {fp} for writing')
+
+        for idx, row in self._obj.iterrows():
+            # Create a new record
+            record = record_type()
+
+            # If this is an OEMolRecord
+            if primary_molecule_column is not None:
+                record.set_mol(row[primary_molecule_column])
+
+            for col in cols:
+                f = fields[col]  # Field on record
+                v = row[col]     # Value for field on current row
+
+                record.add_field(f)
+
+                # If this is not the expected type then do not add it
+                if (not safe) or isinstance(v, field_types[col]):
+                    record.set_value(f, v)
+
+            # Write out the record
+            oechem.OEWriteRecord(ofs, record)
+
+        ofs.close()
 
 
 ########################################################################################################################
