@@ -153,7 +153,7 @@ class MoleculeArray(ExtensionArray):
 
     @classmethod
     def _from_sequence(cls, scalars: Iterable[Any], *, dtype=None, copy=False,
-                       fmt: str | int = oechem.OEFormat_SMI) -> Self:
+                       fmt: str | int | None = None) -> Self:
         """
         Iniitialize from a sequence of scalar values
         :param scalars: Scalars
@@ -162,7 +162,8 @@ class MoleculeArray(ExtensionArray):
         :return: New instance of Molecule Array
         """
         mols = []
-        fmt = oechem.OEGetFormatString(fmt)
+        # Default format is SMILES if none was specified
+        fmt = oechem.OEGetFormatString(oechem.OEFormat_SMI) if fmt is None else oechem.OEGetFormatString(fmt)
 
         for i, obj in enumerate(scalars):
 
@@ -192,7 +193,7 @@ class MoleculeArray(ExtensionArray):
             *,
             astype: type[oechem.OEMolBase] = oechem.OEGraphMol,
             copy: bool = False,
-            fmt: int = oechem.OEFormat_SMI,
+            fmt: int | None = None,
             b64decode: bool = False) -> Self:
         """
         Read molecules form a sequence of strings
@@ -202,6 +203,9 @@ class MoleculeArray(ExtensionArray):
         :param b64decode: Force base64 decoding of molecule strings
         :return: Array of molecules
         """
+        # Default format is SMILES
+        fmt = fmt or oechem.OEFormat_SMI
+
         if not issubclass(astype, oechem.OEMolBase):
             raise TypeError("Can only read molecules from string as an oechem.OEMolBase type")
 
@@ -2069,10 +2073,13 @@ class DataFrameAsMoleculeAccessor:
             self,
             columns: str | Iterable[str],
             *,
-            fmt: dict[str, str] | dict[str, int] | str | int = oechem.OEFormat_SMI,
+            fmt: dict[str, str] | dict[str, int] | str | int | None = None,
             astype=oechem.OEGraphMol,
             inplace=False
     ):
+        # Default format is SMILES if none is specified
+        fmt = fmt or oechem.OEFormat_SMI
+
         # Make sure we're working with a list of columns
         columns = [columns] if isinstance(columns, str) else list(columns)
 
@@ -2191,7 +2198,7 @@ class SeriesAsMoleculeAccessor:
     def __call__(
             self,
             *,
-            fmt: str | int = oechem.OEFormat_SMI,
+            fmt: str | int | None = None,
             astype=oechem.OEGraphMol):
         """
         Convert a series to molecules
@@ -2200,7 +2207,7 @@ class SeriesAsMoleculeAccessor:
         :return: Series as molecule
         """
         # Column OEFormat
-        _fmt = get_oeformat(fmt)
+        _fmt = get_oeformat(oechem.OEFormat_SMI) if fmt is None else get_oeformat(fmt)
 
         # noinspection PyProtectedMember
         arr = MoleculeArray._from_sequence_of_strings(self._obj, astype=astype, fmt=_fmt.oeformat)
