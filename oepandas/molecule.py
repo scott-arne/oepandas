@@ -153,7 +153,7 @@ class MoleculeArray(ExtensionArray):
 
     @classmethod
     def _from_sequence(cls, scalars: Iterable[Any], *, dtype=None, copy=False,
-                       fmt: str | int | None = None) -> Self:
+                       molecule_format: str | int | None = None) -> Self:
         """
         Iniitialize from a sequence of scalar values
         :param scalars: Scalars
@@ -163,7 +163,8 @@ class MoleculeArray(ExtensionArray):
         """
         mols = []
         # Default format is SMILES if none was specified
-        fmt = oechem.OEGetFormatString(oechem.OEFormat_SMI) if fmt is None else oechem.OEGetFormatString(fmt)
+        molecule_format = oechem.OEGetFormatString(oechem.OEFormat_SMI) if molecule_format is None \
+            else oechem.OEGetFormatString(molecule_format)
 
         for i, obj in enumerate(scalars):
 
@@ -177,9 +178,9 @@ class MoleculeArray(ExtensionArray):
 
             elif isinstance(obj, (str, bytes)):
                 mol = oechem.OEGraphMol()
-                if not molecule_from_string(mol, obj, fmt):
+                if not molecule_from_string(mol, obj, molecule_format):
                     log.warning("Could not convert molecule %d from '%s' %s",
-                                i + 1, fmt.name, type(obj).__name__)
+                                i + 1, molecule_format.name, type(obj).__name__)
 
             # Else who knows
             else:
@@ -193,7 +194,7 @@ class MoleculeArray(ExtensionArray):
             *,
             astype: type[oechem.OEMolBase] = oechem.OEGraphMol,
             copy: bool = False,
-            fmt: int | None = None,
+            molecule_format: int | None = None,
             b64decode: bool = False) -> Self:
         """
         Read molecules form a sequence of strings
@@ -204,20 +205,20 @@ class MoleculeArray(ExtensionArray):
         :return: Array of molecules
         """
         # Default format is SMILES
-        fmt = fmt or oechem.OEFormat_SMI
+        molecule_format = molecule_format or oechem.OEFormat_SMI
 
         if not issubclass(astype, oechem.OEMolBase):
             raise TypeError("Can only read molecules from string as an oechem.OEMolBase type")
 
         # Standardize the format
-        fmt = get_oeformat(fmt)
+        molecule_format = get_oeformat(molecule_format)
 
         mols = []
         for i, s in enumerate(strings):  # type: int, str
             mol = astype()
 
-            if not (isinstance(s, str) and molecule_from_string(mol, s.strip(), fmt)):
-                log.warning("Could not convert molecule %d from '%s': %s", i + 1, fmt.name, s)
+            if not (isinstance(s, str) and molecule_from_string(mol, s.strip(), molecule_format)):
+                log.warning("Could not convert molecule %d from '%s': %s", i + 1, molecule_format.name, s)
 
             mols.append(mol)
 
@@ -1015,7 +1016,7 @@ def _read_file_with_data(
     # Get the data off the molecules
     # ----------------------------------------------------------------------
 
-    for idx, mol in enumerate(mols):
+    for idx, mol in enumerate(mols):  # type: int, oechem.OEMolBase
 
         # Differentiate between SD data and generic data
         sd_data_found = {}
@@ -2073,12 +2074,12 @@ class DataFrameAsMoleculeAccessor:
             self,
             columns: str | Iterable[str],
             *,
-            fmt: dict[str, str] | dict[str, int] | str | int | None = None,
+            molecule_format: dict[str, str] | dict[str, int] | str | int | None = None,
             astype=oechem.OEGraphMol,
             inplace=False
     ):
         # Default format is SMILES if none is specified
-        fmt = fmt or oechem.OEFormat_SMI
+        molecule_format = molecule_format or oechem.OEFormat_SMI
 
         # Make sure we're working with a list of columns
         columns = [columns] if isinstance(columns, str) else list(columns)
@@ -2108,15 +2109,19 @@ class DataFrameAsMoleculeAccessor:
             if issubclass(_type, str):
 
                 # File format of the column (as an OEFormat)
-                if fmt is None:
+                if molecule_format is None:
                     col_fmt = oechem.OEFormat_SMI
-                elif isinstance(fmt, dict):
-                    col_fmt = get_oeformat(fmt.get(col, oechem.OEFormat_SMI))
+                elif isinstance(molecule_format, dict):
+                    col_fmt = get_oeformat(molecule_format.get(col, oechem.OEFormat_SMI))
                 else:
-                    col_fmt = get_oeformat(fmt)
+                    col_fmt = get_oeformat(molecule_format)
 
                 # noinspection PyProtectedMember
-                mol_array = MoleculeArray._from_sequence_of_strings(arr, astype=astype, fmt=col_fmt.oeformat)
+                mol_array = MoleculeArray._from_sequence_of_strings(
+                    arr,
+                    astype=astype,
+                    molecule_format=col_fmt.oeformat
+                )
 
             # Otherwise use the more general sequence parser
             else:
@@ -2198,19 +2203,19 @@ class SeriesAsMoleculeAccessor:
     def __call__(
             self,
             *,
-            fmt: str | int | None = None,
+            molecule_format: str | int | None = None,
             astype=oechem.OEGraphMol):
         """
         Convert a series to molecules
-        :param fmt: File format of column to convert to molecules (extension or from oechem.OEFormat namespace)
+        :param molecule_format: File format of column to convert to molecules (extension or from oechem.OEFormat)
         :param astype: oechem.OEGraphMol (default) or oechem.OEMol
         :return: Series as molecule
         """
         # Column OEFormat
-        _fmt = get_oeformat(oechem.OEFormat_SMI) if fmt is None else get_oeformat(fmt)
+        _fmt = get_oeformat(oechem.OEFormat_SMI) if molecule_format is None else get_oeformat(molecule_format)
 
         # noinspection PyProtectedMember
-        arr = MoleculeArray._from_sequence_of_strings(self._obj, astype=astype, fmt=_fmt.oeformat)
+        arr = MoleculeArray._from_sequence_of_strings(self._obj, astype=astype, molecule_format=_fmt.oeformat)
         return pd.Series(arr, index=self._obj.index, dtype=MoleculeDtype())
 
 
