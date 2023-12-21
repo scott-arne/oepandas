@@ -5,9 +5,12 @@ import gzip as python_gzip
 import pandas as pd
 from pathlib import Path
 from collections import Counter
+from collections.abc import Iterable
 from typing import Callable
 from openeye import oechem
 from dataclasses import dataclass
+# noinspection PyProtectedMember
+from pandas._typing import Dtype
 from .exception import UnsupportedFileFormat
 
 log = logging.getLogger("oepandas")
@@ -201,27 +204,27 @@ def create_molecule_to_string_writer(
 
 def molecule_from_string(
         mol: oechem.OEMolBase,
-        string_or_bytes: str | bytes,
+        molecule_string: str,
         fmt: FileFormat,
         b64decode: bool = False
 ) -> bool:
     """
     Convert a molecule from a string representation
     :param mol: OpenEye molecule
-    :param string_or_bytes: String or bytes that represent the molecule
+    :param molecule_string: String representation of molecule
     :param fmt: File format
     :param b64decode: Force base64 decoding of string
-    :return: Molecule
+    :return: True if the molecule was successfully read
     """
     mol.Clear()
 
-    if isinstance(string_or_bytes, str):
-        string_or_bytes = string_or_bytes.encode("utf-8")
+    # Encode the molecule string
+    molecule_bytes = molecule_string.encode("utf-8")
 
     if fmt.is_binary_format or fmt.gzip or b64decode:
-        string_or_bytes = b64.b64decode(string_or_bytes)
+        molecule_bytes = b64.b64decode(molecule_bytes)
 
-    return oechem.OEReadMolFromBytes(mol, fmt.oeformat, fmt.gzip, string_or_bytes)
+    return oechem.OEReadMolFromBytes(mol, fmt.oeformat, fmt.gzip, molecule_bytes)
 
 
 def predominant_type(series: pd.Series, sample_size: int = 25) -> None | type:

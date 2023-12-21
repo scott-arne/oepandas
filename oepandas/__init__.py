@@ -1,30 +1,30 @@
 import logging
+from .arrays import DesignUnitArray, DesignUnitDtype, MoleculeArray, MoleculeDtype
+from .pandas_extensions import (
+    read_sdf,
+    read_smi,
+    read_oedb,
+    read_molecule_csv,
+    read_oeb,
+    read_oedu
+)
 from .exception import FileError, UnsupportedFileFormat
 
-from .molecule import (
-    MoleculeArray,
-    MoleculeDtype,
-    read_molecule_csv,
-    read_smi,
-    read_sdf,
-    read_oeb,
-    read_oedb
-)
-
-
-__version__ = '0.2.15'
+__version__ = '1.0.0'
 
 __all__ = [
     "exception",
-    "molecule",
     "util",
+    "DesignUnitArray",
+    "DesignUnitDtype",
     "MoleculeDtype",
     "MoleculeArray",
     "read_sdf",
     "read_oeb",
     "read_smi",
     "read_molecule_csv",
-    "read_oedb"
+    "read_oedb",
+    "read_oedu"
 ]
 
 
@@ -39,7 +39,7 @@ class LevelSpecificFormatter(logging.Formatter):
     A logging formatter
     """
     NORMAL_FORMAT = "%(message)s"
-    DEBUG_FORMAT = "%(levelname)s: %(message)s"
+    LEVEL_FORMAT = "%(levelname)s: %(message)s"
 
     def __init__(self):
         super().__init__(fmt=self.NORMAL_FORMAT, datefmt=None, style='%')
@@ -50,10 +50,8 @@ class LevelSpecificFormatter(logging.Formatter):
         :param record: Record to format
         :return: Formatted record
         """
-        if record.levelno == logging.DEBUG:
-            self._style._fmt = self.DEBUG_FORMAT
-        else:
-            self._style._fmt = self.NORMAL_FORMAT
+        # Set log style
+        self._style._fmt = self.LEVEL_FORMAT if record.levelno != logging.INFO else self.NORMAL_FORMAT
 
         # Call the original formatter class to do the grunt work
         result = logging.Formatter.format(self, record)

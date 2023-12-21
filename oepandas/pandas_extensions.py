@@ -1,26 +1,25 @@
 import logging
-import sys
 import csv
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from typing import Callable, Literal, Any, Mapping, Protocol
-from collections.abc import Iterable, Hashable, Sequence, Generator
-from pandas.core.ops import unpack_zerodim_and_defer
+from openeye import oechem
+from typing import Callable, Literal, Mapping, Protocol
+from collections.abc import Iterable, Sequence, Hashable
+# noinspection PyProtectedMember
+from pandas.api.types import is_numeric_dtype, is_float, is_integer
 from pandas.core.dtypes.dtypes import PandasExtensionDtype
-from pandas.core.algorithms import take as pandas_take
 # noinspection PyProtectedMember
 from pandas.io.parsers.readers import _c_parser_defaults
 # noinspection PyProtectedMember
 from pandas._libs import lib
-from pandas.api.extensions import (
-    ExtensionArray,
-    register_extension_dtype,
-    register_dataframe_accessor,
-    register_series_accessor
-)
+from pandas.api.extensions import register_dataframe_accessor, register_series_accessor
 # noinspection PyProtectedMember
 from pandas._typing import (
+    FilePath,
+    IndexLabel,
+    ReadBuffer,
+    HashableT,
     CompressionOptions,
     CSVEngine,
     Dtype,
@@ -28,25 +27,16 @@ from pandas._typing import (
     DtypeBackend,
     StorageOptions,
 )
-from openeye import oechem
-from copy import copy as shallow_copy
 from .util import (
     get_oeformat,
     is_gz,
-    molecule_from_string,
     create_molecule_to_string_writer,
-    create_molecule_to_bytes_writer,
     predominant_type
 )
-from .exception import FileError, InvalidSMARTS
-
-if sys.version_info >= (3, 11):
-    from typing import Self  # pyright: ignore[reportUnusedImport]
-else:
-    from typing_extensions import Self  # pyright: ignore[reportUnusedImport]
-
+from .arrays import MoleculeArray, MoleculeDtype, DesignUnitArray, DesignUnitDtype
 # noinspection PyProtectedMember
-from pandas._typing import Shape, FilePath, IndexLabel, ReadBuffer, HashableT, TakeIndexer, ArrayLike, FillnaOptions
+from .arrays.molecule import _read_molecules
+from .exception import FileError
 
 log = logging.getLogger("oepandas")
 
@@ -55,778 +45,136 @@ log = logging.getLogger("oepandas")
 # Helpers
 ########################################################################################################################
 
-def _read_molecule_file(
-        fp: FilePath,
-        file_format: int | str,
-        *,
-        flavor: int | None = None,
-        astype: type[oechem.OEMolBase] = oechem.OEMol,
-        conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default",
-        gzip: bool = False
-) -> Generator[oechem.OEMolBase, None, None]:
-    """
-    Generator over flavored reading of molecules in a specific file format
-
-    Use conformer_test to combine single conformers into multi-conformer molecules:
-        - "default":
-                No conformer testing.
-        - "absolute":
-                Combine conformers if they (1) have the same number of atoms and bonds in the same order, (2)
-                each atom and bond have identical properties in the connection table, (3) have the same title.
-        - "absolute_canonical":
-                Combine conformers if they have the same canonical SMILES
-        - "isomeric":
-                Combine conformers if they (1) have the same number of atoms and bonds in the same order, (2)
-                each atom and bond have identical properties in the connection table, (3) have the same atom and bond
-                stereochemistry, (4) have the same title.
-        - "omega":
-                Equivalent to "isomeric" except that invertible nitrogen stereochemistry is also taken into account.
-
-    :param fp: File path
-    :param file_format: File format (oechem.OEFormat)
-    :param flavor: Optional flavor (oechem.OEIFlavor)
-    :param astype: OpenEye molecule type to read (oechem.OEMolBase or oechem.OEGraphMol)
-    :param gzip: File is gzipped
-    :return: Generator over molecules
-    """
-    fmt = get_oeformat(file_format, gzip=gzip or is_gz(fp))
-
-    # Conformer test forces OEMol
-    if conformer_test != "default":
-        astype = oechem.OEMol
-
-    with oechem.oemolistream(str(fp)) as ifs:
-        ifs.SetFormat(fmt.oeformat)
-
-        if conformer_test == "default":
-            ifs.SetConfTest(oechem.OEDefaultConfTest())
-        elif conformer_test == "absolute":
-            ifs.SetConfTest(oechem.OEAbsoluteConfTest())
-        elif conformer_test == "absolute_canonical":
-            ifs.SetConfTest(oechem.OEAbsCanonicalConfTest())
-        elif conformer_test == "isomeric":
-            ifs.SetConfTest(oechem.OEIsomericConfTest())
-        elif conformer_test == "omega":
-            ifs.SetConfTest(oechem.OEOmegaConfTest())
-
-        # Set flavor if requested
-        if flavor is not None:
-            ifs.SetFlavor(file_format, flavor)
-
-        # Read gzipped formats
-        ifs.Setgz(fmt.gzip)
-
-        iterator = ifs.GetOEMols if astype is oechem.OEMol else ifs.GetOEGraphMols
-        for mol in iterator():
-            yield mol.CreateCopy()
-
-
-########################################################################################################################
-# Pandas Extensions
-#
-# Great resources for this:
-#   - https://itnext.io/guide-to-pandas-extension-types-and-how-to-create-your-own-3b213d689c86
-#   - https://stackoverflow.com/questions/68893521/simple-example-of-pandas-extensionarray
-#
-# Pandas Documentation:
-#   - https://github.com/pandas-dev/pandas/blob/e7e7b40722e421ef7e519c645d851452c70a7b7c/pandas/core/arrays/base.py
-#   - https://pandas.pydata.org/docs/reference/api/pandas.api.extensions.ExtensionDtype.html
-########################################################################################################################
-
-
-class MoleculeArray(ExtensionArray):
-    """
-    Custom extension for an array of molecules
-    """
-    def __init__(self, mols: oechem.OEMolBase | Iterable[oechem.OEMolBase], copy=False):
-        """
-        Initialize
-        :param mols: Sequence/array of molecules
-        :param copy: Create copy of the molecules if True
-        """
-        if isinstance(mols, Iterable):
-            self.mols = np.array([mol.CreateCopy() if copy else mol for mol in mols])
-        elif isinstance(mols, oechem.OEMolBase):
-            self.mols = np.array([mols.CreateCopy()] if copy else [mols])
-        else:
-            raise TypeError(f'Cannot create MoleculeArray from {type(mols).__name__}')
-
-    @classmethod
-    def _from_sequence(cls, scalars: Iterable[Any], *, dtype=None, copy=False,
-                       molecule_format: str | int | None = None) -> Self:
-        """
-        Iniitialize from a sequence of scalar values
-        :param scalars: Scalars
-        :param dtype: Coerce to this datatype (must be a subclass of oechem.OEMolBase)
-        :param copy: Copy the molecules (otherwise stores pointers)
-        :return: New instance of Molecule Array
-        """
-        mols = []
-        # Default format is SMILES if none was specified
-        molecule_format = oechem.OEGetFormatString(oechem.OEFormat_SMI) if molecule_format is None \
-            else oechem.OEGetFormatString(molecule_format)
-
-        for i, obj in enumerate(scalars):
-
-            # Nones are OK
-            if obj is None or pd.isna(obj):
-                mols.append(None)
-
-            # Molecule subclasses
-            elif isinstance(obj, oechem.OEMolBase):
-                mols.append(mol.CreateCopy() if copy else mol for mol in scalars)
-
-            elif isinstance(obj, (str, bytes)):
-                mol = oechem.OEGraphMol()
-                if not molecule_from_string(mol, obj, molecule_format):
-                    log.warning("Could not convert molecule %d from '%s' %s",
-                                i + 1, molecule_format.name, type(obj).__name__)
-
-            # Else who knows
-            else:
-                raise TypeError(f'Cannot create a molecule from {type(obj).__name__}')
-        return cls([mol.CreateCopy() if copy else mol for mol in scalars])
-
-    @classmethod
-    def _from_sequence_of_strings(
-            cls,
-            strings: Sequence[str],
-            *,
-            astype: type[oechem.OEMolBase] = oechem.OEGraphMol,
-            copy: bool = False,
-            molecule_format: int | None = None,
-            b64decode: bool = False) -> Self:
-        """
-        Read molecules form a sequence of strings
-        :param strings: Sequence of strings
-        :param astype: Data type for molecules (must be oechem.OEMolBase)
-        :param copy: Not used (here for API compatibility)
-        :param b64decode: Force base64 decoding of molecule strings
-        :return: Array of molecules
-        """
-        # Default format is SMILES
-        molecule_format = molecule_format or oechem.OEFormat_SMI
-
-        if not issubclass(astype, oechem.OEMolBase):
-            raise TypeError("Can only read molecules from string as an oechem.OEMolBase type")
-
-        # Standardize the format
-        molecule_format = get_oeformat(molecule_format)
-
-        mols = []
-        for i, s in enumerate(strings):  # type: int, str
-            mol = astype()
-
-            if not (isinstance(s, str) and molecule_from_string(mol, s.strip(), molecule_format)):
-                log.warning("Could not convert molecule %d from '%s': %s", i + 1, molecule_format.name, s)
-
-            mols.append(mol)
-
-        return cls(mols)
-
-    @property
-    def dtype(self) -> PandasExtensionDtype:
-        return MoleculeDtype()
-
-    def fillna(
-        self,
-        value: object | ArrayLike | None = None,
-        method: FillnaOptions | None = None,
-        limit: int | None = None,
-        copy: bool = True,
-    ) -> Self:
-        """
-        Fill N/A values and invalid molecules
-        :param value: Fill value
-        :param method: Method (does not do anything here)
-        :param limit: Maximum number of entries to fill
-        :param copy: Whether to copy the data
-        :return: Filled extension array
-        """
-        # Sanity check
-        if limit is not None:
-            limit = max(0, limit)
-
-        # Data to fill
-        data = np.array([(obj.CreateCopy() if isinstance(obj, oechem.OEMolBase) else obj) for obj in self.mols]) \
-            if copy else self.mols
-
-        # Filled data
-        filled = []
-
-        for i, obj in enumerate(data):
-            # Termination condition with limit
-            if limit is not None and i >= limit:
-                filled.extend(data[i:])
-                break
-
-            # NaN evaluation
-            if pd.isna(obj):
-                filled.append(value)
-            elif isinstance(obj, oechem.OEMolBase):
-                filled.append((obj.CreateCopy() if copy else obj) if obj.IsValid() else value)
-            else:
-                raise TypeError(f'MoleculeArray cannot determine of object of type {type(obj).__name__} is Na')
-
-        return MoleculeArray(filled)
-
-    def dropna(self) -> Self:
-        """
-        Drop all NA and invalid molecules
-        :return: MoleculeArray with no missing or invalid molecules
-        """
-        non_missing = []
-
-        for obj in self.mols:
-            if not pd.isna(obj):
-                if isinstance(obj, oechem.OEMolBase):
-                    if obj.IsValid():
-                        non_missing.append(obj)
-                else:
-                    raise TypeError(f'MoleculeArray cannot determine of object of type {type(obj).__name__} is Na')
-
-        return MoleculeArray(non_missing)
-
-    @property
-    def shape(self) -> Shape:
-        return self.mols.shape
-
-    @property
-    def na_value(self):
-        return None
-
-    def take(
-        self,
-        indices: TakeIndexer,
-        *,
-        allow_fill: bool = False,
-        fill_value: Any = None,
-    ) -> Self:
-        """
-        Take elements from the array
-        :param indices:
-        :param allow_fill:
-        :param fill_value:
-        :return:
-        """
-        if allow_fill and fill_value is None:
-            fill_value = self.dtype.na_value
-
-        result = pandas_take(np.array(self.mols), indices, allow_fill=allow_fill, fill_value=fill_value)
-        return self._from_sequence(result)
-
-    # --------------------------------------------------------
-    # I/O
-    # --------------------------------------------------------
-
-    @classmethod
-    def read_sdf(
-            cls,
-            fp,
-            flavor=None,
-            astype: type[oechem.OEMolBase] = oechem.OEMol,
-            conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default"
-    ) -> Self:
-        """
-        Read molecules from an SD file and return an array
-
-        Use conformer_test to combine single conformers into multi-conformer molecules:
-        - "default":
-                No conformer testing.
-        - "absolute":
-                Combine conformers if they (1) have the same number of atoms and bonds in the same order, (2)
-                each atom and bond have identical properties in the connection table, (3) have the same title.
-        - "absolute_canonical":
-                Combine conformers if they have the same canonical SMILES
-        - "isomeric":
-                Combine conformers if they (1) have the same number of atoms and bonds in the same order, (2)
-                each atom and bond have identical properties in the connection table, (3) have the same atom and bond
-                stereochemistry, (4) have the same title.
-        - "omega":
-                Equivalent to "isomeric" except that invertible nitrogen stereochemistry is also taken into account.
-
-        :param fp: Path to the SD file
-        :param flavor: OpenEye input flavor
-        :param astype: Type of molecule to read
-        :param conformer_test: Conformer testing (will override astype to oechem.OEMol)
-        :return: Molecule array populated by the molecules in the file
-        """
-        return cls(
-            _read_molecule_file(
-                fp,
-                oechem.OEFormat_SDF,
-                flavor=flavor,
-                astype=astype,
-                conformer_test=conformer_test
-            )
-        )
-
-    @classmethod
-    def read_oeb(
-            cls,
-            fp: FilePath,
-            flavor=None,
-            astype: type[oechem.OEMolBase] = oechem.OEMol,
-            conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default"
-    ) -> Self:
-        """
-        Read molecules from an OEB file and return an array
-
-        Use conformer_test to combine single conformers into multi-conformer molecules:
-        - "default":
-                No conformer testing.
-        - "absolute":
-                Combine conformers if they (1) have the same number of atoms and bonds in the same order, (2)
-                each atom and bond have identical properties in the connection table, (3) have the same title.
-        - "absolute_canonical":
-                Combine conformers if they have the same canonical SMILES
-        - "isomeric":
-                Combine conformers if they (1) have the same number of atoms and bonds in the same order, (2)
-                each atom and bond have identical properties in the connection table, (3) have the same atom and bond
-                stereochemistry, (4) have the same title.
-        - "omega":
-                Equivalent to "isomeric" except that invertible nitrogen stereochemistry is also taken into account.
-
-        :param fp: Path to the OEB file
-        :param flavor: OpenEye input flavor
-        :param astype: Type of molecule to read
-        :param conformer_test: Conformer testing (will override astype to oechem.OEMol)
-        :return: Molecule array populated by the molecules in the file
-        """
-        return cls(
-            _read_molecule_file(
-                fp,
-                oechem.OEFormat_OEB,
-                flavor=flavor,
-                astype=astype,
-                conformer_test=conformer_test
-            )
-        )
-
-    @classmethod
-    def read_smi(cls, fp, flavor=None, astype: type[oechem.OEMolBase] = oechem.OEMol) -> Self:
-        """
-        Read molecules from an SMILES file and return an array
-        :param fp: Path to the SMILES file
-        :param flavor: OpenEye input flavor
-        :param astype: Type of molecule to read
-        :return: Molecule array populated by the molecules in the file
-        """
-        return cls(_read_molecule_file(fp, oechem.OEFormat_SMI, flavor=flavor, astype=astype))
-
-    def tolist(self, copy=False) -> list[oechem.OEMolBase]:
-        """
-        Convert to a list
-        :param copy: Whether to copy the molecules or return pointers
-        :return: List of molecules
-        """
-        if copy:
-            return [mol.CreateCopy() for mol in self.mols]
-        return self.mols.tolist()
-
-    @classmethod
-    def _concat_same_type(cls, to_concat: Sequence[Self]) -> Self:
-        """
-        Concatenate objects with the same datatype
-        :param to_concat: Objects to concatenate
-        :return: Concatenated object
-        """
-        # NOTE: tuple(...) was very important below to prevent a really strange concatenation error
-        return MoleculeArray(np.concatenate(tuple(arr.mols for arr in to_concat)))
-
-    @classmethod
-    def _from_factorized(cls, values, original):
-        """
-        NOT IMPLEMENTED: Reconstruct an MoleculeArray after factorization
-        """
-        raise NotImplemented("Factorization not implemented for MoleculeArray")
-
-    def _formatter(self, boxed: bool = False) -> Callable[[Any], str | None]:
-        """
-        Formatter to used
-        :param boxed: Whether this object is boxed in a series
-        :return: Formatter to use for rendering this object
-        """
-        return str
-
-    # --------------------------------------------------------
-    # Utilities
-    # --------------------------------------------------------
-
-    def copy(self):
-        """
-        Create a shallow copy of the array (molecules objects are not copied)
-        :return: Shallow copy of the array
-        :rtype: list[oechem.OEMolBase]
-        """
-        return MoleculeArray(shallow_copy(self.mols))
-
-    def deepcopy(self):
-        """
-        Create a deep copy of the array (molecule objects are copied)
-        :return: Deep copy of the array
-        :rtype: list[oechem.OEMolBase]
-        """
-        return MoleculeArray([mol.CreateCopy() for mol in self.mols])
-
-    def isna(self):
-        """
-        Return a boolean array of whether elements in the array are None
-        :return: Boolean array
-        """
-        return np.array([mol is None for mol in self.mols])
-
-    def valid(self) -> np.ndarray:
-        """
-        Return a boolean array of whether molecules are valid or invalid
-        :return: Boolean array
-        """
-        return np.array([mol.IsValid() for mol in self.mols], dtype=bool)
-
-    # noinspection PyPep8Naming
-    def subsearch(self, pattern: str | oechem.OESubSearch, adjustH: bool = False) -> np.ndarray:
-        """
-        Return a boolean array of whether molecules are a substructure match to a pattern
-        :param pattern: SMARTS pattern or OpenEye subsearch object
-        :param adjustH: Match implicit/explicit hydrogen state between query and target molecule
-        :return: Boolean array
-        """
-        ss = oechem.OESubSearch(pattern) if isinstance(pattern, str) else pattern
-
-        if not ss.IsValid():
-            if isinstance(pattern, str):
-                raise InvalidSMARTS(f'Invalid SMARTS pattern: {pattern}')
-            else:
-                raise InvalidSMARTS("Invalid oechem.OESubSearch object provided to match")
-
-        matches = []
-        for mol in self.mols:
-            oechem.OEPrepareSearch(mol, ss, adjustH)
-            matches.append(ss.SingleMatch(mol))
-        return np.array(matches, dtype=bool)
-
-    # --------------------------------------------------------
-    # Conversions
-    # --------------------------------------------------------
-
-    def to_molecule_strings(
-            self,
-            molecule_format: str | int = "smiles",
-            flavor: int | None = None,
-            gzip: bool = False,
-            b64encode: bool = False
-    ) -> np.ndarray:
-        """
-        Write molecules to an array of strings.
-
-        Missing or invalid molecules are represented by empty strings. Binary or gzipped formats are automatically
-        base64 encoded so for valid string representations. Note that gzip is automatically inferred if you provide
-        an extension ending in gz.
-
-        Note that excess newlines are stripped form the strings.
-
-        :param molecule_format: Molecule format (extension or oechem.OEFormat)
-        :param flavor: Output flavor (None will give the default)
-        :param gzip: Gzip the molecule string (will be base64 encoded)
-        :param b64encode: Force base64 encoding for all molecules
-        :return: Array of molecule strings
-        """
-        # Create the function that will convert molecules to strings
-        molecule_to_string = create_molecule_to_string_writer(
-            fmt=molecule_format,
-            flavor=flavor,
-            gzip=gzip,
-            b64encode=b64encode,
-            strip=True
-        )
-
-        molecule_strings = []
-        for mol in self.mols:
-            if mol is not None and mol.IsValid():
-                molecule_strings.append(molecule_to_string(mol))
-            else:
-                molecule_strings.append('')
-
-        return np.array(molecule_strings, dtype=str)
-
-    def to_molecule_bytes(
-            self,
-            molecule_format: str | int = oechem.OEFormat_SMI,
-            flavor: int | None = None,
-            gzip: bool = False
-    ) -> np.ndarray:
-        """
-        Write molecules to an array of bytes.
-
-        Invalid or empty molecules are added as an empty bytes string.
-
-        :param molecule_format: Molecule format (extension or oechem.OEFormat)
-        :param flavor: Output flavor (None will give the default flavor)
-        :param gzip: Gzip the molecule bytes
-        :return: Array of molecule bytes
-        """
-
-        # Get the molecule format
-        to_molecule_bytes = create_molecule_to_bytes_writer(molecule_format, flavor, gzip)
-
-        molecule_bytes = []
-        for mol in self.mols:
-            if mol is not None and mol.IsValid():
-                molecule_bytes.append(to_molecule_bytes(mol))
-
-            # None for invalid molecules
-            else:
-                molecule_bytes.append(b'')
-
-        return np.array(molecule_bytes, dtype=bytes)
-
-    def to_smiles(self, flavor: int | None = None) -> np.ndarray:
-        """
-        Convert array to SMILES.
-
-        This is implemented using a more efficient method for SMILES than to_molecule_string. Invalid or missing
-        molecules are represented by empty strings.
-
-        :return: Array of molecule strings.
-        """
-        # Default flavor is canonical isomeric SMILES
-        flavor = flavor or oechem.OESMILESFlag_ISOMERIC
-
-        smiles = []
-        for mol in self.mols:
-            if mol is not None and mol.IsValid():
-                smiles.append(oechem.OECreateSmiString(mol, flavor))
-            else:
-                smiles.append('')
-        return np.array(smiles, dtype=str)
-
-    # --------------------------------------------------------
-    # Operators
-    # --------------------------------------------------------
-
-    def append(self, mol: oechem.OEMolBase):
-        """
-        Append a molecule to the array
-        :param mol: Molecule to append
-        """
-        if not isinstance(mol, oechem.OEMolBase):
-            raise TypeError("Can only append oechem.OEMolBase types to a MoleculeArray")
-
-        # noinspection PyTypeChecker
-        self.mols = np.append(self.mols, mol, axis=None)
-
-    def extend(self, mols: Iterable[oechem.OEMolBase]):
-        """
-        Extend the molecule array
-        :param mols: Molecules to extend array with
-        :type mols: list[oechem.OEMolBase
-        """
-        if not all(isinstance(mol, oechem.OEMolBase) for mol in mols):
-            raise TypeError("Can only extend a MoleculeArray with a list of oechem.OEMolBase objects")
-
-        self.mols = np.concatenate((self.mols, mols), axis=0)
-
-    @property
-    def nbytes(self) -> int:
-        """
-        Number of bytes in this object
-        Note: This is nowhere near accurate because sys.getsizeof does not return the correct size of the
-              underlying OpenEye molecule objects.
-        :return: Size of the contents of this array
-        """
-        return sum(sys.getsizeof(mol) for mol in self.mols)
-
-    def equals(self, other: object) -> bool:
-        """
-        Test equality with other objects
-        :param other: Another MoleculeArray or list of molecules
-        :return: True if the objects are equal
-        """
-        if isinstance(other, MoleculeArray):
-            return self.mols == other.mols
-        elif isinstance(other, list):
-            return self.mols == other
-        else:
-            raise TypeError(f'Cannot compare equality between MoleculeArray and {type(other).__name__}')
-
-    @unpack_zerodim_and_defer('__eq__')
-    def __eq__(self, other):
-        return self.equals(other)
-
-    @unpack_zerodim_and_defer('__ne__')
-    def __ne__(self, other: 'MoleculeArray') -> bool:
-        return self.mols != other.mols
-
-    @unpack_zerodim_and_defer('__lt__')
-    def __lt__(self, other: 'MoleculeArray') -> bool:
-        return len(self.mols) < len(other.mols)
-
-    @unpack_zerodim_and_defer('__gt__')
-    def __gt__(self, other) -> bool:
-        return len(self.mols) > len(other.mols)
-
-    @unpack_zerodim_and_defer('__le__')
-    def __le__(self, other: 'MoleculeArray') -> bool:
-        return len(self.mols) <= len(other.mols)
-
-    @unpack_zerodim_and_defer('__ge__')
-    def __ge__(self, other: 'MoleculeArray') -> bool:
-        return len(self.mols) >= len(other.mols)
-
-    @pd.core.ops.unpack_zerodim_and_defer('__add__')
-    def __add__(self, other: Sequence[Self]) -> 'MoleculeArray':
-        if isinstance(other, pd.DataFrame):
-            raise NotImplemented("Adding MoleculeArray and pandas DataFrame is not implemented")
-        elif isinstance(other, pd.Series):
-            return MoleculeArray(np.concatenate((self.mols, other.array)))
-        elif isinstance(other, MoleculeArray):
-            return MoleculeArray(np.concatenate((self.mols, other.mols)))
-        elif isinstance(other, Iterable):
-            return MoleculeArray(np.concatenate((self.mols, other)))
-        else:
-            raise TypeError(f'Do not know how to add MoleculeArray and {type(other).__name__}')
-
-    @unpack_zerodim_and_defer('__sub__')
-    def __sub__(self, other: 'MoleculeArray') -> 'MoleculeArray':
-        raise NotImplemented("Subtraction not implemented for MoleculeArray")
-
-    def __reversed__(self):
-        return MoleculeArray(reversed(self.mols))
-
-    def __iter__(self):
-        return iter(self.mols)
-
-    def __len__(self):
-        """
-        Get the number of molecules in this array
-        :return: Number of molecules in array
-        :rtype: int
-        """
-        return self.mols.size
-
-    # noinspection PyDefaultArgument
-    def __deepcopy__(self, memodict={}):
-        return self.deepcopy()
-
-    def __copy__(self):
-        return self.copy()
-
-    def __hash__(self):
-        return hash(self.mols)
-
-    def __setitem__(self, index, value):
-        """
-        Set an item in the array
-        :param index: Item index
-        :type index: int
-        :param value: Item to set
-        :type value: oechem.OEMolBase
-        :return:
-        """
-        self.mols[index] = value
-
-    def __getitem__(self, index):
-        """
-        Get an item in the array
-        :param index: Item index
-        :return: Item at index
-        :rtype: oechem.OEMolBase
-        """
-        if isinstance(index, int):
-            return self.mols[index]
-        return MoleculeArray(self.mols[index])
-
-    def __str__(self):
-        return f'<MoleculeArray size={len(self)}>'
-
-    def __repr__(self):
-        return self.__str__()
-
-
-@register_extension_dtype
-class MoleculeDtype(PandasExtensionDtype):
-    """
-    OpenEye molecule datatype for Pandas
-    """
-
-    type: type = oechem.OEMolBase
-    name: str = "molecule"
-    kind: str = "O"
-    base = np.dtype("O")
-    isbuiltin = 0
-    isnative = 0
-
-    _is_numeric = False
-    _is_boolean = False
-
-    @classmethod
-    def construct_array_type(cls):
-        """
-        Return array type associated with this dtype
-        """
-        return MoleculeArray
-
-    # Required
-    def __hash__(self) -> int:
-        return hash(str(self))
-
-    # Required
-    def __eq__(self, other: Any) -> bool:
-        if isinstance(other, str):
-            return self.name == other
-        return isinstance(other, type(self))
-
-    # Required
-    def __str__(self):
-        return self.name
-
-    # Required
-    def __repr__(self):
-        return self.__str__()
-
-
-########################################################################################################################
-# Pandas: Global Readers
-########################################################################################################################
-
 class Column:
     """
-    Column to create a Pandas DataFrame
-
-    The index attribute
+    Column to create in a Pandas DataFrame from any iterable of data. This more importantly allows us to create or
+    preserve an index associated with the data elements.
     """
     def __init__(
             self,
             name: str,
-            data: Iterable[Any] = None,
+            data: Iterable | None = None,
             dtype: Dtype = object,
-            index: list[Any] | None = None
+            index: Iterable | None = None
     ):
         self.name = name
-        self.data = data or []
+        self.data = [] if data is None else list(data)
         self.dtype = dtype
-        self.index = index or []
+        self.index = [] if index is None else list(index)
 
-    def to_series_tuple(self) -> tuple[str, pd.Series]:
-        """
-        Convert to a tuple with the name and Pandas series
-        :return: Name, series tuple
-        """
-        # If we did not track custom indexes
-        if self.index is None or len(self.index) == 0:
-            return self.name, pd.Series(self.data, dtype=self.dtype)
+    def __len__(self):
+        return len(self.data)
 
-        if len(self.index) != len(self.data):
-            raise ValueError(
-                "Number of data values ({}) != number of index values ({}) for column {}".format(
-                    len(self.data),
-                    len(self.index),
-                    self.name
+
+class Dataset:
+    """
+    Dataset read off of objects to be put into a DataFrame
+    """
+    TYPES = {
+        str: str,
+        float: float,
+        int: int,
+        bool: bool,
+        oechem.OEMolBase: MoleculeDtype(),
+        oechem.OEDesignUnit: DesignUnitDtype()
+    }
+
+    # Sentinel for cases where the type has not been determined
+    TYPE_NOT_DETERMINED = object()
+
+    def __init__(self, usecols: Iterable[str] | None = None):
+        self.columns: dict[str, Column] = {}
+        self.usecols = None if usecols is None else set(usecols)
+
+    def add(
+            self,
+            col: str,
+            val: str | float | int | bool | oechem.OEMolBase | oechem.OEDesignUnit,
+            idx: int | None = None,
+            force_type: type | PandasExtensionDtype | None = None
+    ):
+        """
+        Add data to the dataset
+        :param col: Column name
+        :param val: Value to add
+        :param idx: Index of the object
+        :param force_type: Value type to force
+        """
+        # If we are using on certain columns
+        if self.usecols is None or col in self.usecols:
+
+            t = self.TYPES.get(type(val), object) if force_type is None else force_type
+
+            # If this is a new column
+            if col not in self.columns:
+
+                self.columns[col] = Column(
+                    col,
+                    dtype=self.TYPE_NOT_DETERMINED if pd.isna(val) else t
                 )
-            )
 
-        return self.name, pd.Series(self.data, index=self.index, dtype=self.dtype)
+            # Check if we have resolved a data type
+            if self.columns[col].dtype is self.TYPE_NOT_DETERMINED and not pd.isna(val):
+                self.columns[col].dtype = t
 
+            else:
+                # Check if we have to modify the datatype
+                if self.columns[col].dtype != t:
+
+                    # "Downgrade" numeric types to float
+                    if is_numeric_dtype(t) and is_numeric_dtype(self.columns[col].dtype):
+                        self.columns[col].dtype = float
+
+                    # Everything else is downgraded to object
+                    else:
+                        self.columns[col].dtype = object
+
+            # Add the value
+            self.columns[col].data.append(val)
+
+            if idx is not None:
+                self.columns[col].index.append(idx)
+
+    def keys(self):
+        """
+        Get the column names
+        :return: Column keys
+        """
+        return self.columns.keys()
+
+    def pop(self, key: str):
+        """
+        Pop a column
+        :return: Popped column
+        """
+        return self.columns.pop(key)
+
+    def to_series_dict(self) -> dict[str, pd.Series]:
+        """
+        Convert to a dictionary with names and Pandas series
+        :return: Dictionary
+        """
+        return {
+            name: pd.Series(
+                data=column.data,
+                index=None if len(column.index) == 0 else column.index,
+                dtype=column.dtype
+            ) for name, column in self.columns.items()
+        }
+
+    def __getitem__(self, item):
+        return self.columns[item]
+
+    def __setitem__(self, key, value):
+        self.columns[key] = value
+
+    def __delitem__(self, key):
+        del self.columns[key]
+
+
+########################################################################################################################
+# Molecule Array: I/O
+########################################################################################################################
 
 def _add_smiles_columns(
         df: pd.DataFrame,
@@ -841,7 +189,7 @@ def _add_smiles_columns(
     - Iterable[str] => Add SMILES for one or more molecule columns
     - dict[str, str] => Add SMILES for one or more molecule columns with custom column names
 
-    :param df: Dataframe to add SMILES columns to
+    :param df: DataFrame to add SMILES columns to
     :param molecule_columns: Column(s) that the user requested
     :param add_smiles: Column definition(s) for adding SMILES
     """
@@ -897,12 +245,11 @@ class MoleculeArrayReaderProtocol(Protocol):
             self,
             fp: FilePath,
             flavor: int | None,
-            astype: type[oechem.OEMolBase],
             conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"]
     ) -> MoleculeArray: ...
 
 
-def _read_file_with_data(
+def _read_molecules_to_dataframe(
     reader: MoleculeArrayReaderProtocol,
     filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
     *,
@@ -911,15 +258,16 @@ def _read_file_with_data(
     title_column_name: str | None = "Title",
     add_smiles: None | bool | str | Iterable[str] = None,
     molecule_columns: None | str | Iterable[str] = None,
-    read_generic_data=True,
-    read_sd_data=True,
+    expand_confs: bool = False,
+    generic_data=True,
+    sd_data=True,
     usecols: None | str | Iterable[str] = None,
-    numeric: None | str | dict[str, Literal["integer", "signed", "unsigned", "float"] | None] | Iterable[str] = None,
+    numeric_columns: None | str | dict[str, Literal["integer", "signed", "unsigned", "float"] | None] | Iterable[str] = None,  # noqa
     conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default",
     combine_tags: Literal["prefix", "prefer_sd", "prefer_generic"] = "prefix",
+    conf_index_column_name: str = "ConfIdx",
     sd_prefix: str = "SD Tag: ",
-    generic_prefix: str = "Generic Tag: ",
-    astype=oechem.OEGraphMol
+    generic_prefix: str = "Generic Tag: "
 ) -> pd.DataFrame:
     """
     Read a molecule file with SD data and/or generic data
@@ -929,17 +277,17 @@ def _read_file_with_data(
     :param molecule_column_name: Name of the molecule column in the dataframe
     :param title_column_name: Name of the column with molecule titles in the dataframe
     :param add_smiles: Include a SMILES column in the dataframe (SMILES will be re-canonicalized)
+    :param expand_confs: Expand conformers (i.e., create a new molecule for each conformer)
     :param molecule_columns: Additional columns to convert to molecules
-    :param read_generic_data: If True, read generic data (default is True)
-    :param read_sd_data: If True, read SD data (default is True)
+    :param generic_data: If True, read generic data (default is True)
+    :param sd_data: If True, read SD data (default is True)
     :param usecols: List of data tags to read (default is all read all generic and SD data)
-    :param numeric: Data column(s) to make numeric
+    :param numeric_columns: Data column(s) to make numeric
     :param conformer_test: Combine single conformer molecules into multiconformer
     :param combine_tags: Strategy for combining identical SD and generic data tags
     :param sd_prefix: Prefix for SD data with corresponding generic data columns (for combine_tags='prefix')
     :param generic_prefix: Prefix for generic data with corresponding SD data columns (for combine_tags='prefix')
-    :param astype: Type of OpenEye molecule to read
-    :return:
+    :return: Pandas DataFrame
     """
     # Read the molecules themselves
     if not isinstance(filepath_or_buffer, (str, Path)):
@@ -954,144 +302,105 @@ def _read_file_with_data(
         usecols = frozenset((usecols,)) if isinstance(usecols, str) else frozenset(usecols)
 
     # Make sure numeric is a dict of columns and type strings (None = let Pandas figure it out
-    if numeric is not None:
-        if isinstance(numeric, str):
-            numeric = {numeric: None}
-        elif isinstance(numeric, Iterable) and not isinstance(numeric, dict):
-            numeric = {col: None for col in numeric}
+    if numeric_columns is not None:
+        if isinstance(numeric_columns, str):
+            numeric_columns = {numeric_columns: None}
+        elif isinstance(numeric_columns, Iterable) and not isinstance(numeric_columns, dict):
+            numeric_columns = {col: None for col in numeric_columns}
 
         # Sanity check the molecule column
-        if molecule_column_name in numeric:
+        if molecule_column_name in numeric_columns:
             raise KeyError(f'Cannot make molecule column {molecule_column_name} numeric')
-
-    # Read the molecules into a molecule array
-    mols = reader(filepath_or_buffer, flavor=flavor, astype=astype, conformer_test=conformer_test)
 
     # --------------------------------------------------
     # Start building our DataFrame with the molecules
     # --------------------------------------------------
-    data = {molecule_column_name: Column(molecule_column_name, mols, dtype=MoleculeDtype())}
 
-    # Titles
+    # Read the molecules into a molecule array
+    mols = reader(filepath_or_buffer, flavor=flavor, conformer_test=conformer_test)
+
+    # Our initial dataframe is built from the molecules themselves
+    if expand_confs:
+        confs = []
+        conf_idx = []
+        for mol in mols:  # type: oechem.OEMol
+            for conf in mol.GetConfs():  # type: oechem.OEConfBase
+                confs.append(oechem.OEMol(conf))
+                conf_idx.append(conf.GetIdx())
+
+        data = {
+            molecule_column_name: pd.Series(data=confs, dtype=MoleculeDtype()),
+            conf_index_column_name: pd.Series(data=conf_idx, dtype=str)
+        }
+    else:
+        data = {molecule_column_name: pd.Series(data=mols, dtype=MoleculeDtype())}
+
+    # Add titles to the dataframe
     if title_column_name is not None:
-        data[title_column_name] = Column(
-            title_column_name,
+        data[title_column_name] = pd.Series(
             [mol.GetTitle() if isinstance(mol, oechem.OEMolBase) else None for mol in mols],
             dtype=str
         )
 
     # ----------------------------------------------------------------------
-    # Index the data tags and create the columns
-    # We need to track both generic data and SD data separately in case
-    # we have identical tags. We will apply the combine_tags rule in order
-    # to differentiate between identical tags at the end.
-    # ----------------------------------------------------------------------
-
-    sd_data = {}
-    generic_data = {}
-
-    for mol in mols:
-        if read_sd_data:
-            for dp in oechem.OEGetSDDataPairs(mol):
-                if (usecols is None or dp.GetTag() in usecols) and (dp.GetTag() not in sd_data):
-                    # SD data is always type object, which we'll use until string support is no longer experimental
-                    # in Pandas
-                    sd_data[dp.GetTag()] = Column(dp.GetTag(), dtype=object)
-
-            if read_generic_data:
-                for diter in mol.GetDataIter():
-                    tag = oechem.OEGetTag(diter.GetTag())
-                    if (usecols is None or tag in usecols) and (tag not in generic_data) and (tag != "SDTagData"):
-                        try:
-                            value = diter.GetData()
-
-                            # Can value ever be None/null in the toolkits?
-                            if value is not None:
-                                generic_data[tag] = Column(tag, dtype=type(value))
-
-                        except Exception as ex:  # noqa
-                            continue
-
-    # ----------------------------------------------------------------------
     # Get the data off the molecules
     # ----------------------------------------------------------------------
 
-    for idx, mol in enumerate(mols):  # type: int, oechem.OEMolBase
+    if sd_data or generic_data:
+        # Differentiate between SD data and generic data, so that we can prefix overlapping column names
+        sd_dataset = Dataset(usecols=usecols)
+        generic_dataset = Dataset(usecols=usecols)
 
-        # Differentiate between SD data and generic data
-        sd_data_found = {}
-        generic_data_found = {}
+        for idx, mol in enumerate(mols):  # type: int, oechem.OEMol
 
-        if read_sd_data:
-            for dp in oechem.OEGetSDDataPairs(mol):
+            if sd_data:
 
-                # Only read SD data indexed above
-                if dp.GetTag() in sd_data:
-                    sd_data_found[dp.GetTag()] = dp.GetValue()
+                for dp in oechem.OEGetSDDataPairs(mol.GetActive()):
+                    sd_dataset.add(dp.GetTag(), dp.GetValue(), idx)
 
-            if read_generic_data:
+            if generic_data:
+
                 for diter in mol.GetDataIter():
 
-                    # Only read generic data indexed above
-                    tag = oechem.OEGetTag(diter.GetTag())
-                    if tag in generic_data:
-                        try:
-                            val = diter.GetData()
-                            generic_data_found[tag] = val
-                        except:  # noqa
-                            # Use NaN for floats
-                            if generic_data[tag].dtype == float or np.issubdtype(generic_data[tag].dtype, np.floating):
-                                generic_data_found[tag] = np.nan
-                            # TODO: Customize integer NaN value
-                            elif generic_data[tag].dtype == int or np.issubdtype(generic_data[tag].dtype, np.integer):
-                                generic_data_found[tag] = -1
-                            elif generic_data[tag].dtype == str or np.issubdtype(generic_data[tag].dtype, np.str_):
-                                generic_data[tag] = ''
-                            # And None for everything else
-                            else:
-                                generic_data_found[tag] = None
+                    try:
+                        tag = oechem.OEGetTag(diter.GetTag())
+                        val = diter.GetData()
+                        generic_dataset.add(tag, val, idx)
 
-        # Add all the found SD data
-        for k, v in sd_data_found.items():
-            sd_data[k].data.append(v)
-            sd_data[k].index.append(idx)
+                    except ValueError:
+                        continue
 
-        # Add all the found generic data
-        for k, v in generic_data_found.items():
-            generic_data[k].data.append(v)
-            generic_data[k].index.append(idx)
+        # Resolve overlapping column names between SD data and generic data
+        for col in set(sd_dataset.keys()).intersection(set(generic_dataset.keys())):
+            if combine_tags == "prefix":
 
-    # Resolve overlapping column names between SD data and generic data
-    for col in set(sd_data.keys()).intersection(set(generic_data.keys())):
-        if combine_tags == "prefix":
+                new_sd_name = f'{sd_prefix}{col}'
+                new_generic_name = f'{generic_prefix}{col}'
 
-            new_sd_name = f'{sd_prefix}{col}'
-            new_generic_name = f'{generic_prefix}{col}'
+                sd_dataset[new_sd_name] = sd_dataset.pop(col)
+                sd_dataset[new_sd_name].name = new_sd_name
 
-            sd_data[new_sd_name] = sd_data.pop(col)
-            sd_data[new_sd_name].name = new_sd_name
+                generic_dataset[new_generic_name] = generic_dataset.pop(col)
+                generic_dataset[new_generic_name].name = new_generic_name
 
-            generic_data[new_generic_name] = generic_data.pop(col)
-            generic_data[new_generic_name].name = new_generic_name
+            elif combine_tags == "prefer_sd":
+                del generic_dataset[col]
 
-        elif combine_tags == "prefer_sd":
-            del generic_data[col]
+            elif combine_tags == "prefer_generic":
+                del sd_dataset[col]
 
-        elif combine_tags == "prefer_generic":
-            del sd_data[col]
+            else:
+                raise KeyError(f'Unknown combine_tags strategy: {combine_tags}')
 
-        else:
-            raise KeyError(f'Unknown combine_tags strategy: {combine_tags}')
-
-    # Combine the tags:
-    data = {
-        **data,
-        **sd_data,
-        **generic_data
-    }
+        # Combine the tags:
+        data = {
+            **data,
+            **sd_dataset.to_series_dict(),
+            **generic_dataset.to_series_dict()
+        }
 
     # Create the DataFrame
-    df = pd.DataFrame(dict(col.to_series_tuple() for col in data.values()))
+    df = pd.DataFrame(data)
 
     # Post-process the dataframe only if we have data
     if len(df) > 0:
@@ -1107,18 +416,21 @@ def _read_file_with_data(
                 for col in molecule_columns:
 
                     # Check if we have been asked to make this column numeric later
-                    if col in numeric:
+                    if col in numeric_columns:
                         raise KeyError(f'Cannot make molecule column {col} numeric')
 
                     if col in df.columns:
+
+                        # We don't need to convert the primary molecule column
                         if col != molecule_column_name:
                             df.as_molecule(col, inplace=True)
+
                     else:
                         log.warning(f'Column not found in DataFrame: {col}')
 
         # Cast numeric columns
-        if numeric is not None:
-            for col, dtype in numeric.items():
+        if numeric_columns is not None:
+            for col, dtype in numeric_columns.items():
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors="ignore", downcast=dtype)
                 else:
@@ -1127,6 +439,7 @@ def _read_file_with_data(
         # Add SMILES column(s)
         if add_smiles is not None:
 
+            # Only adding SMILES to the primary molecule column
             if molecule_columns is None:
                 molecule_columns = [molecule_column_name]
 
@@ -1137,10 +450,9 @@ def _read_file_with_data(
 
 def read_molecule_csv(
     filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
-    molecule_columns: str | dict[str, int] | dict[str, str],
+    molecule_columns: str | dict[str, int] | dict[str, str] | Literal["detect"],
     *,
     add_smiles: None | bool | str | Iterable[str] = None,
-    astype=oechem.OEGraphMol,
     # pd.read_csv options here for type completion
     sep: str | None | lib.NoDefault = lib.no_default,
     delimiter: str | None | lib.NoDefault = None,
@@ -1259,7 +571,10 @@ def read_molecule_csv(
 
     # Convert molecule columns if we have data
     if len(df) > 0:
-        df.as_molecule(molecule_columns, astype=astype, inplace=True)
+        if molecule_columns == "detect":
+            df.detect_molecule_columns()
+        else:
+            df.as_molecule(molecule_columns, inplace=True)
 
     # Process 'add_smiles' by first standardizing it to a dictionary
     if add_smiles is not None:
@@ -1278,8 +593,7 @@ def read_smi(
     molecule_column_name: str = "Molecule",
     title_column_name: str = "Title",
     smiles_column_name: str = "SMILES",
-    inchi_key_column_name: str = "InChI Key",
-    astype=oechem.OEGraphMol
+    inchi_key_column_name: str = "InChI Key"
 ) -> pd.DataFrame:
     """
     Read structures from a SMILES file to a dataframe
@@ -1292,8 +606,7 @@ def read_smi(
     :param title_column_name: Name of the column with molecule titles in the dataframe
     :param smiles_column_name: Name of the SMILES column (if smiles is True)
     :param inchi_key_column_name: Name of the InChI key column (if inchi_key is True)
-    :param astype: Type of OpenEye molecule to read
-    :return: Dataframe with molecules
+    :return: DataFrame with molecules
     """
     if not isinstance(filepath_or_buffer, (Path, str)):
         raise NotImplemented("Only reading from molecule paths is implemented")
@@ -1318,11 +631,10 @@ def read_smi(
     if not fp.exists():
         raise FileNotFoundError(f'File does not exist: {fp}')
 
-    for mol in _read_molecule_file(
+    for mol in _read_molecules(
             filepath_or_buffer,
             file_format=oechem.OEFormat_CXSMILES if cx else oechem.OEFormat_SMI,
             flavor=flavor,
-            astype=astype
     ):
         row_data = {title_column_name: mol.GetTitle(), molecule_column_name: mol.CreateCopy()}
 
@@ -1356,8 +668,7 @@ def read_sdf(
     usecols: None | str | Iterable[str] = None,
     numeric: None | str | dict[str, Literal["integer", "signed", "unsigned", "float"] | None] | Iterable[str] = None,
     conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default",
-    sd_data: bool = True,
-    astype=oechem.OEGraphMol
+    read_sd_data: bool = True
 ) -> pd.DataFrame:
     """
     Read structures from an SD file into a DataFrame.
@@ -1392,11 +703,10 @@ def read_sdf(
     :param usecols: List of SD tags to read (default is all SD data is read)
     :param numeric: Data column(s) to make numeric
     :param conformer_test: Combine single conformer molecules into multiconformer
-    :param sd_data: Read SD data
-    :param astype: Type of OpenEye molecule to read
+    :param read_sd_data: Read SD data
     :return: Pandas DataFrame
     """
-    return _read_file_with_data(
+    return _read_molecules_to_dataframe(
         MoleculeArray.read_sdf,
         filepath_or_buffer,
         flavor=flavor,
@@ -1404,12 +714,11 @@ def read_sdf(
         title_column_name=title_column_name,
         add_smiles=add_smiles,
         molecule_columns=molecule_columns,
-        read_generic_data=False,
-        read_sd_data=sd_data,
+        generic_data=False,
+        sd_data=read_sd_data,
         usecols=usecols,
-        numeric=numeric,
-        conformer_test=conformer_test,
-        astype=astype
+        numeric_columns=numeric,
+        conformer_test=conformer_test
     )
 
 
@@ -1428,8 +737,7 @@ def read_oeb(
     conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default",
     combine_tags: Literal["prefix", "prefer_sd", "prefer_generic"] = "prefix",
     sd_prefix: str = "SD Tag: ",
-    generic_prefix: str = "Generic Tag: ",
-    astype=oechem.OEGraphMol
+    generic_prefix: str = "Generic Tag: "
 ) -> pd.DataFrame:
     """
     Read structures OpenEye binary molecule files.
@@ -1469,10 +777,9 @@ def read_oeb(
     :param combine_tags: Strategy for combining identical SD and generic data tags
     :param sd_prefix: Prefix for SD data with corresponding generic data columns (for combine_tags='prefix')
     :param generic_prefix: Prefix for generic data with corresponding SD data columns (for combine_tags='prefix')
-    :param astype: Type of OpenEye molecule to read
     :return: Pandas DataFrame
     """
-    return _read_file_with_data(
+    return _read_molecules_to_dataframe(
         MoleculeArray.read_oeb,
         filepath_or_buffer,
         flavor=flavor,
@@ -1480,15 +787,14 @@ def read_oeb(
         title_column_name=title_column_name,
         add_smiles=add_smiles,
         molecule_columns=molecule_columns,
-        read_generic_data=read_generic_data,
-        read_sd_data=read_sd_data,
+        generic_data=read_generic_data,
+        sd_data=read_sd_data,
         usecols=usecols,
-        numeric=numeric,
+        numeric_columns=numeric,
         conformer_test=conformer_test,
         combine_tags=combine_tags,
         sd_prefix=sd_prefix,
-        generic_prefix=generic_prefix,
-        astype=astype
+        generic_prefix=generic_prefix
     )
 
 
@@ -1498,7 +804,14 @@ def read_oedb(
     usecols: None | str | Iterable[str] = None,
     int_na: int | None = None,
 ) -> pd.DataFrame:
-    data = {}
+    """
+    Read an OEDB file
+    :param fp: Path to OEDB file
+    :param usecols: Optional columns to use
+    :param int_na: Value to use in place of NaN for integers
+    :return: DataFrame
+    """
+    data = Dataset(usecols=usecols)
 
     # Open the record file
     filename = str(fp) if isinstance(fp, Path) else fp
@@ -1511,7 +824,7 @@ def read_oedb(
             raise FileError(f'Could not open file for reading: {fp}')
 
     # Read the records
-    for idx, record in enumerate(oechem.OEReadRecords(ifs)):  # type: oechem.OERecord
+    for idx, record in enumerate(oechem.OEReadRecords(ifs)):  # type: int, oechem.OERecord
         for field in record.get_fields():  # type: oechem.OEFieldBase
             name = field.get_name()
             # noinspection PyUnresolvedReferences
@@ -1525,93 +838,177 @@ def read_oedb(
             # Float field
             # ------------------------------
             if dtype == oechem.Types.Float:
-                if name not in data:
-                    data[name] = Column(name, dtype=float)
-
                 val = record.get_value(field)
-                data[name].data.append(val if isinstance(val, float) else np.nan)
-                data[name].index.append(idx)
+
+                if pd.isna(val):
+                    data.add(name, np.NaN, idx, force_type=float)
+                else:
+                    data.add(name, val, idx, force_type=float)
 
             # ------------------------------
             # Integer field
             # ------------------------------
             elif dtype == oechem.Types.Int:
-                if name not in data:
-                    data[name] = Column(name, dtype=int)
-
                 val = record.get_value(field)
-                if not isinstance(val, int):
-                    if int_na is None:
-                        data[name].dtype = object
-                        data[name].data.append(None)
-                    else:
-                        data[name].data.append(int_na)
-                else:
-                    data[name].data.append(val)
 
-                data[name].index.append(idx)
+                # Value is NaN - we try to preserve the integer data type, but int_na could mess that up
+                if pd.isna(val):
+
+                    # If our NaN value is None, then we'll convert this type float
+                    if pd.isna(int_na):
+                        data.add(name, np.NaN, idx, force_type=float)
+
+                    elif is_float(int_na):
+                        data.add(name, int_na, idx, force_type=float)
+
+                    elif is_integer(int_na):
+                        data.add(name, int_na, idx, force_type=int)
+
+                    else:
+                        data.add(name, int_na, idx, force_type=object)
+
+                # Else we have an integer value
+                else:
+                    data.add(name, val, idx, force_type=int)
 
             # ------------------------------
             # Boolean field
             # ------------------------------
             elif dtype == oechem.Types.Bool:
-                if name not in data:
-                    data[name] = Column(name, dtype=bool)
-
                 val = record.get_value(field)
-                if not isinstance(val, bool):
-                    data[name].dtype = object
-                    data[name].data.append(None)
-                else:
-                    data[name].data.append(val)
-
-                data[name].index.append(idx)
+                data.add(name, val, idx, force_type=bool)
 
             # ------------------------------
             # Molecule field
             # ------------------------------
             elif dtype == oechem.Types.Chem.Mol:
-                if name not in data:
-                    data[name] = Column(name, dtype=MoleculeDtype())
-
                 val = record.get_value(field)
-                data[name].data.append(val if isinstance(val, oechem.OEMolBase) else None)
-                data[name].index.append(idx)
+                data.add(name, val, idx, force_type=MoleculeDtype())
+
+            # ------------------------------
+            # Design unit field
+            # ------------------------------
+            elif dtype == oechem.Types.Chem.DesignUnit:
+                val = record.get_value(field)
+                data.add(name, val, idx, force_type=DesignUnitDtype())
 
             # ------------------------------
             # Everything else
             # ------------------------------
             else:
-                if name not in data:
-                    data[name] = Column(name, dtype=object)
-
                 val = record.get_value(field)
-                data[name].data.append(val)
-                data[name].index.append(idx)
+                data.add(name, val, idx, force_type=object)
 
     # Close the record file
     ifs.close()
 
     # Create the DataFrame
-    df = pd.DataFrame(dict(col.to_series_tuple() for col in data.values()))
-    return df
-
-
-# ----------------------------------------------------------------------
-# Monkey patch these into Pandas, which makes them discoverable to
-# people looking there and not in the oepandas package
-# ----------------------------------------------------------------------
-
-pd.read_molecule_csv = read_molecule_csv
-pd.read_smi = read_smi
-pd.read_sdf = read_sdf
-pd.read_oeb = read_oeb
-pd.read_oedb = read_oedb
+    return pd.DataFrame(data.to_series_dict())
 
 
 ########################################################################################################################
-# Pandas DataFrame: Writers
+# Molecule Array: DataFrame Extensions
 ########################################################################################################################
+
+@register_dataframe_accessor("as_molecule")
+class DataFrameAsMoleculeAccessor:
+    """
+    Accessor that adds the as_molecule method to a Pandas DataFrame
+    """
+
+    def __init__(self, pandas_obj):
+        self._obj = pandas_obj
+
+    def __call__(
+            self,
+            columns: str | Iterable[str],
+            *,
+            molecule_format: dict[str, str] | dict[str, int] | str | int | None = None,
+            inplace=False
+    ):
+        # Default format is SMILES if none is specified
+        molecule_format = molecule_format or oechem.OEFormat_SMI
+
+        # Make sure we're working with a list of columns
+        columns = [columns] if isinstance(columns, str) else list(columns)
+
+        # Validate column names
+        for name in columns:
+            if name not in self._obj.columns:
+                raise KeyError(f'Column {name} not found in DataFrame: {", ".join(self._obj.columns)}')
+
+        # Whether we are working inplace or on a copy
+        df = self._obj if inplace else self._obj.copy()
+
+        # Convert the columns using the as_molecule series accessor
+        for col in columns:
+
+            df[col] = df[col].as_molecule(molecule_format=molecule_format or oechem.OEFormat_SMI)
+
+        return df
+
+
+@register_dataframe_accessor("filter_invalid_molecules")
+class FilterInvalidMoleculesAccessor:
+    """
+    Filter invalid molecules in one or more columns
+    """
+    def __init__(self, pandas_obj):
+        self._obj = pandas_obj
+
+    def __call__(
+            self,
+            columns: str | Iterable[str],
+            *,
+            inplace=False
+    ):
+
+        # Make sure we're working with a list of columns
+        columns = [columns] if isinstance(columns, str) else list(columns)
+
+        # Validate column names
+        for name in columns:
+            if name not in self._obj.columns:
+                raise KeyError(f'Column {name} not found in DataFrame: {", ".join(self._obj.columns)}')
+
+        # Compute a bitmask of rows that we want to keep over all the columns
+        mask = np.array([True] * len(self._obj))
+        for col in columns:
+            mask &= self._obj[col].array.valid()
+
+        if inplace:
+            self._obj.drop(self._obj[~mask].index, inplace=True)
+            return self._obj
+
+        return self._obj.drop(self._obj[~mask].index)
+
+
+@register_dataframe_accessor("detect_molecule_columns")
+class DataFrameDetectMoleculeColumnsAccessor:
+    def __init__(self, pandas_obj: pd.DataFrame):
+        self._obj = pandas_obj
+
+    def __call__(self, *, sample_size: int = 25) -> None:
+        """
+        Detects molecule columns based on their predominant type and convert them to MoleculeDtype. This works if
+        the columns primarily contain objects that derive from oechem.OEMolBase (all OpenEye molecule objects).
+        :param sample_size: Maximum number of non-null values to sample to determine column type
+        """
+        molecule_columns = []
+
+        for col in self._obj.columns:
+
+            # Skip columns that are already molecule columns
+            if self._obj[col].dtype != MoleculeDtype():
+
+                t = predominant_type(self._obj[col], sample_size=sample_size)
+
+                if t is not None and issubclass(t, oechem.OEMolBase):
+                    molecule_columns.append(col)
+
+        # Convert to molecule columns
+        self._obj.as_molecule(molecule_columns, inplace=True)
+
 
 @register_dataframe_accessor("to_sdf")
 class WriteToSDFAccessor:
@@ -1925,6 +1322,7 @@ _BYTES_TYPES = (
 class WriteToOEDB:
     """
     Write to a CSV file containing molecules
+    TODO: Add compress_confs argument to compress conformers into single multi-conformer molecules
     """
     def __init__(self, pandas_obj: pd.DataFrame):
         self._obj = pandas_obj.copy()
@@ -2058,141 +1456,7 @@ class WriteToOEDB:
 
 
 ########################################################################################################################
-# Pandas DataFrame: Utilities
-########################################################################################################################
-
-@register_dataframe_accessor("as_molecule")
-class DataFrameAsMoleculeAccessor:
-    """
-    Accessor that adds the as_molecule method to a Pandas DataFrame
-    """
-
-    def __init__(self, pandas_obj):
-        self._obj = pandas_obj
-
-    def __call__(
-            self,
-            columns: str | Iterable[str],
-            *,
-            molecule_format: dict[str, str] | dict[str, int] | str | int | None = None,
-            astype=oechem.OEGraphMol,
-            inplace=False
-    ):
-        # Default format is SMILES if none is specified
-        molecule_format = molecule_format or oechem.OEFormat_SMI
-
-        # Make sure we're working with a list of columns
-        columns = [columns] if isinstance(columns, str) else list(columns)
-
-        # Validate column names
-        for name in columns:
-            if name not in self._obj.columns:
-                raise KeyError(f'Column {name} not found in DataFrame: {", ".join(self._obj.columns)}')
-
-        # Whether we are working inplace or on a copy
-        df = self._obj if inplace else self._obj.copy()
-
-        # Convert the columns
-        for col in columns:
-
-            # Get the underlying array
-            arr = self._obj[col].array
-
-            # Peek at the first non-null value and see if it looks like an OpenEye object
-            _type = None
-            for obj in arr:
-                if not pd.isna(obj):
-                    _type = type(obj)
-                    break
-
-            # If we have strings then use the optimized parser for sequences of strings
-            if issubclass(_type, str):
-
-                # File format of the column (as an OEFormat)
-                if molecule_format is None:
-                    col_fmt = oechem.OEFormat_SMI
-                elif isinstance(molecule_format, dict):
-                    col_fmt = get_oeformat(molecule_format.get(col, oechem.OEFormat_SMI))
-                else:
-                    col_fmt = get_oeformat(molecule_format)
-
-                # noinspection PyProtectedMember
-                mol_array = MoleculeArray._from_sequence_of_strings(
-                    arr,
-                    astype=astype,
-                    molecule_format=col_fmt.oeformat
-                )
-
-            # Otherwise use the more general sequence parser
-            else:
-                # noinspection PyProtectedMember
-                mol_array = MoleculeArray._from_sequence(arr)
-
-            # Replace the column
-            df[col] = pd.Series(mol_array, index=self._obj.index)
-
-        return df
-
-
-@register_dataframe_accessor("filter_invalid_molecules")
-class FilterInvalidMoleculesAccessor:
-    """
-    Filter invalid molecules in one or more columns
-    """
-    def __init__(self, pandas_obj):
-        self._obj = pandas_obj
-
-    def __call__(
-            self,
-            columns: str | Iterable[str],
-            *,
-            inplace=False
-    ):
-
-        # Make sure we're working with a list of columns
-        columns = [columns] if isinstance(columns, str) else list(columns)
-
-        # Validate column names
-        for name in columns:
-            if name not in self._obj.columns:
-                raise KeyError(f'Column {name} not found in DataFrame: {", ".join(self._obj.columns)}')
-
-        # Compute a bitmask of rows that we want to keep over all the columns
-        mask = np.array([True] * len(self._obj))
-        for col in columns:
-            mask &= self._obj[col].array.valid()
-
-        if inplace:
-            self._obj.drop(self._obj[~mask].index, inplace=True)
-            return self._obj
-
-        return self._obj.drop(self._obj[~mask].index)
-
-
-@register_dataframe_accessor("detect_molecule_columns")
-class DataFrameDetectMoleculeColumnsAccessor:
-    def __init__(self, pandas_obj: pd.DataFrame):
-        self._obj = pandas_obj
-
-    def __call__(self, *, sample_size: int = 25) -> None:
-        """
-        Detects molecule columns based on their predominant type and convert them to MoleculeDtype. This works if
-        the columns primarily contain objects that derive from oechem.OEMolBase (all OpenEye molecule objects).
-        :param sample_size: Maximum number of non-null values to sample to determine column type
-        """
-        molecule_columns = []
-
-        for col in self._obj.columns:
-            t = predominant_type(self._obj[col], sample_size=sample_size)
-            if t is not None and issubclass(t, oechem.OEMolBase):
-                molecule_columns.append(col)
-
-        # Convert to molecule columns
-        self._obj.as_molecule(molecule_columns, inplace=True)
-
-
-########################################################################################################################
-# Pandas Series: Utilities
+# Molecule Array: Series Extensions
 ########################################################################################################################
 
 @register_series_accessor("as_molecule")
@@ -2204,18 +1468,17 @@ class SeriesAsMoleculeAccessor:
             self,
             *,
             molecule_format: str | int | None = None,
-            astype=oechem.OEGraphMol):
+    ) -> pd.Series:
         """
         Convert a series to molecules
         :param molecule_format: File format of column to convert to molecules (extension or from oechem.OEFormat)
-        :param astype: oechem.OEGraphMol (default) or oechem.OEMol
         :return: Series as molecule
         """
         # Column OEFormat
         _fmt = get_oeformat(oechem.OEFormat_SMI) if molecule_format is None else get_oeformat(molecule_format)
 
         # noinspection PyProtectedMember
-        arr = MoleculeArray._from_sequence_of_strings(self._obj, astype=astype, molecule_format=_fmt.oeformat)
+        arr = MoleculeArray._from_sequence(self._obj, molecule_format=_fmt.oeformat)
         return pd.Series(arr, index=self._obj.index, dtype=MoleculeDtype())
 
 
@@ -2305,7 +1568,7 @@ class SeriesToSmilesAccessor:
             self,
             *,
             flavor: int = oechem.OESMILESFlag_ISOMERIC,
-            astype=oechem.OEGraphMol):
+    ) -> pd.Series:
         """
         Convert a series to SMILES
         :param flavor: Flavor for generating SMILES (bitmask from oechem.OESMILESFlag)
@@ -2340,3 +1603,180 @@ class SeriesSubsearchAccessor:
         :return: Series as molecule
         """
         return pd.Series(self._obj.array.subsearch(pattern, adjustH=adjustH), dtype=bool)
+
+
+########################################################################################################################
+# Design Unit Array: I/O
+########################################################################################################################
+
+def read_oedu(
+    filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
+    *,
+    design_unit_column_name: str = "Design_Unit",
+    design_unit_title_column_name: str = "Title",
+    generic_data: bool = True
+) -> pd.DataFrame:
+    """
+    Read an OEDB file into a Pandas DataFrame
+    :param filepath_or_buffer: File path or buffer
+    :param design_unit_column_name: Column name for the design units
+    :param design_unit_title_column_name: Column name for the design unit title
+    :param generic_data: Read data from the design unit into columns
+    :return: Pandas DataFrame
+    """
+    # Cannot yet read from STDIN or other buffers
+    if not isinstance(filepath_or_buffer, (str, Path)):
+        raise NotImplementedError("Reading from buffers is not yet supported for read_oedu")
+
+    # Read design units
+    du_array = DesignUnitArray.read_oedu(filepath_or_buffer)
+
+    # Read data
+    data = Dataset()
+    if generic_data:
+        # Get the data and use indexes to assign data
+        for idx, du in enumerate(du_array):
+            for diter in du.GetDataIter():
+                try:
+                    tag = oechem.OEGetTag(diter.GetTag())
+                    value = diter.GetValue()
+                    data.add(tag, value, idx)
+
+                except Exception as ex:  # noqa
+                    continue
+
+    return pd.DataFrame({
+        design_unit_column_name: pd.Series(du_array, dtype=DesignUnitDtype()),
+        design_unit_title_column_name: pd.Series([du.GetTitle() for du in du_array], dtype=str),
+        **data.to_series_dict()
+    })
+
+
+########################################################################################################################
+# Design Unit Array: DataFrame Extensions
+########################################################################################################################
+
+@register_dataframe_accessor("as_design_unit")
+class DataFrameAsDesignUnitAccessor:
+    """
+    Accessor that adds the as_molecule method to a Pandas DataFrame
+    """
+
+    def __init__(self, pandas_obj):
+        self._obj = pandas_obj
+
+    def __call__(
+            self,
+            columns: str | Iterable[str],
+            *,
+            inplace=False
+    ):
+        # Make sure we're working with a list of columns
+        columns = [columns] if isinstance(columns, str) else list(columns)
+
+        # Validate column names
+        for name in columns:
+            if name not in self._obj.columns:
+                raise KeyError(f'Column {name} not found in DataFrame: {", ".join(self._obj.columns)}')
+
+        # Whether we are working inplace or on a copy
+        df = self._obj if inplace else self._obj.copy()
+
+        # Convert the columns using the as_molecule series accessor
+        for col in columns:
+
+            df[col] = df[col].as_design_unit()
+
+        return df
+
+
+########################################################################################################################
+# Design Unit Array: Series Extensions
+########################################################################################################################
+
+@register_series_accessor("get_ligands")
+class SeriesGetLigandAccessor:
+    def __init__(self, pandas_obj):
+        if not isinstance(pandas_obj.dtype, DesignUnitDtype):
+            raise TypeError(
+                "get_ligand only works on design unit columns (oepandas.DesignUnitDtype). If this column has "
+                "design units, use pd.Series.as_design_unit to convert to a design unit column first."
+            )
+
+        self._obj = pandas_obj
+
+    def __call__(self):
+        """
+        Get ligands from design units
+        :return: Molecule series with ligands
+        """
+        return pd.Series(self._obj.array.get_ligands(), dtype=MoleculeDtype())
+
+
+@register_series_accessor("get_proteins")
+class SeriesGetProteinAccessor:
+    def __init__(self, pandas_obj):
+        if not isinstance(pandas_obj.dtype, DesignUnitDtype):
+            raise TypeError(
+                "get_protein only works on design unit columns (oepandas.DesignUnitDtype). If this column has "
+                "design units, use pd.Series.as_design_unit to convert to a design unit column first."
+            )
+
+        self._obj = pandas_obj
+
+    def __call__(self):
+        """
+        Get ligands from design units
+        :return: Molecule series with ligands
+        """
+        return pd.Series(self._obj.array.get_proteins(), dtype=MoleculeDtype())
+
+
+@register_series_accessor("get_components")
+class SeriesGetProteinAccessor:
+    def __init__(self, pandas_obj):
+        if not isinstance(pandas_obj.dtype, DesignUnitDtype):
+            raise TypeError(
+                "get_components only works on design unit columns (oepandas.DesignUnitDtype). If this column has "
+                "design units, use pd.Series.as_design_unit to convert to a design unit column first."
+            )
+
+        self._obj = pandas_obj
+
+    def __call__(self, mask: int):
+        """
+        Get ligands from design units
+        :param mask: Component mask
+        :return: Molecule series with ligands
+        """
+        return pd.Series(self._obj.array.get_components(mask), dtype=MoleculeDtype())
+
+
+@register_series_accessor("as_design_unit")
+class SeriesAsDesignUnitAccessor:
+    def __init__(self, pandas_obj):
+        self._obj = pandas_obj
+
+    def __call__(self) -> pd.Series:
+        """
+        Convert a series to design units
+        :return: Series as design units
+        """
+        # noinspection PyProtectedMember
+        arr = DesignUnitArray._from_sequence(self._obj)
+        return pd.Series(arr, index=self._obj.index, dtype=DesignUnitDtype())
+
+
+########################################################################################################################
+# Pandas monkeypatching
+########################################################################################################################
+
+# Molecules
+pd.read_molecule_csv = read_molecule_csv
+pd.read_smi = read_smi
+pd.read_sdf = read_sdf
+pd.read_oeb = read_oeb
+pd.read_oedb = read_oedb
+
+# Design units
+pd.read_oedu = read_oedu

@@ -6,5 +6,6 @@ class TestVersion(unittest.TestCase):
         """
         Example test
         """
+        # noinspection PyProtectedMember
         from oepandas import __version__
         self.assertIsNotNone(__version__)
