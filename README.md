@@ -12,7 +12,7 @@ NumPy arrays, and ```MoleculeArrayDtype``` for typing Pandas series.
 Simply adding ```import oepandas``` at the top of your file registers a number of [Pandas extensions](https://pandas.pydata.org/docs/development/extending.html) that 
 support molecule handling. You can also use a number of useful methods directly from OEPandas itself.
 
-## Getting Started
+## Getting Started with Molecules
 
 First let's experiment with three files in the test directory that all contain the same data. We'll start with the
 CSV file, which contains the following data for 5 molecules:
@@ -140,7 +140,35 @@ We get the following:
 4  ...      Diazepam  284.74022             2          0            1
 ```
 
-**More documentation coming soon!**
+## Getting Started with Design Units
+
+You can also read design unit files the exact same way. You can see below how we can get the ligand and protein
+molecules from the design unit and use them in a few simple calculations.
+
+```python
+import oepandas as oepd
+from openeye import oechem
+
+# Read the data
+df = oepd.read_oedu("tests/assets/2.oedu")
+
+# Use standard OpenEye logic to count the number of oxygens in each molecule
+df["Ligand"] = df.Design_Unit.get_ligands()
+df["Ligand_SMILES"] = df.Ligand.apply(oechem.OEMolToSmiles)
+df["Protein"] = df.Design_Unit.get_proteins()
+df["Num_CAlphas"] = df.Protein.apply(lambda mol: oechem.OECount(mol, oechem.OEIsCAlpha()))
+
+df.head()
+```
+
+You'll see the following:
+
+```text
+                 Design_Unit                   Title              Ligand            Protein  Num_CAlphas   Ligand_SMILES
+0  <oechem.OEDesignUnit; ...   1JFF(AB) > TA1(B-601)  <oechem.OEMol; ...  <oechem.OEMol; ...         837  CC1[C@H](C[...
+1  <oechem.OEDesignUnit; ...  1TVK(AB) >  EP(B-1001)  <oechem.OEMol; ...  <oechem.OEMol; ...         836  Cc1nc(cs1)/...
+```
+
 
 # Development
 
