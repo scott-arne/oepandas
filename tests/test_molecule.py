@@ -600,6 +600,18 @@ class TestMoleculeArray(unittest.TestCase):
                 df.TEST.tolist()
             )
 
+    def test_copy_molecule(self):
+        """
+        Copy molecules
+        """
+        df = pd.DataFrame({"Molecule": pd.Series(MoleculeArray(self.copy_mols()), dtype=MoleculeDtype())})
+        df["Molecule2"] = df.Molecule.copy_molecules()
+
+        molecules1 = set(df.Molecule.tolist())
+        molecules2 = set(df.Molecule2.tolist())
+
+        self.assertNotEqual(molecules1, molecules2)
+
     def test_read_oedb(self):
         """
         Read data records

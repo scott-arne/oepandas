@@ -1459,9 +1459,25 @@ class WriteToOEDB:
 # Molecule Array: Series Extensions
 ########################################################################################################################
 
+@register_series_accessor("copy_molecules")
+class SeriesCopyMoleculeAccessor:
+    def __init__(self, pandas_obj: pd.Series):
+        if not isinstance(pandas_obj.dtype, MoleculeDtype):
+            raise TypeError(
+                "copy_molecules only works on molecule columns (oepandas.MoleculeDtype). If this column has "
+                "molecules, use pd.Series.as_molecule to convert to a molecule column first."
+            )
+
+        self._obj = pandas_obj
+
+    def __call__(self) -> pd.Series:
+        # noinspection PyUnresolvedReferences
+        return pd.Series(self._obj.array.deepcopy(), dtype=MoleculeDtype())
+
+
 @register_series_accessor("as_molecule")
 class SeriesAsMoleculeAccessor:
-    def __init__(self, pandas_obj):
+    def __init__(self, pandas_obj: pd.Series):
         self._obj = pandas_obj
 
     def __call__(
@@ -1484,7 +1500,7 @@ class SeriesAsMoleculeAccessor:
 
 @register_series_accessor("to_molecule_bytes")
 class SeriesToMoleculeBytesAccessor:
-    def __init__(self, pandas_obj):
+    def __init__(self, pandas_obj: pd.Series):
         if not isinstance(pandas_obj.dtype, MoleculeDtype):
             raise TypeError(
                 "to_molecule_bytes only works on molecule columns (oepandas.MoleculeDtype). If this column has "
@@ -1507,6 +1523,7 @@ class SeriesToMoleculeBytesAccessor:
         :param gzip: Gzip the molecule bytes
         :return: Series of molecules as SMILES
         """
+        # noinspection PyUnresolvedReferences
         arr = self._obj.array.to_molecule_bytes(
             molecule_format=molecule_format,
             flavor=flavor,
@@ -1518,7 +1535,7 @@ class SeriesToMoleculeBytesAccessor:
 
 @register_series_accessor("to_molecule_strings")
 class SeriesToMoleculeStringsAccessor:
-    def __init__(self, pandas_obj):
+    def __init__(self, pandas_obj: pd.Series):
         if not isinstance(pandas_obj.dtype, MoleculeDtype):
             raise TypeError(
                 "to_molecule_string only works on molecule columns (oepandas.MoleculeDtype). If this column has "
@@ -1543,6 +1560,7 @@ class SeriesToMoleculeStringsAccessor:
         :param b64encode: Force base64 encoding for all molecules
         :return: Series of molecules as SMILES
         """
+        # noinspection PyUnresolvedReferences
         arr = self._obj.array.to_molecule_strings(
             molecule_format=molecule_format,
             flavor=flavor,
@@ -1581,7 +1599,7 @@ class SeriesToSmilesAccessor:
 
 @register_series_accessor("subsearch")
 class SeriesSubsearchAccessor:
-    def __init__(self, pandas_obj):
+    def __init__(self, pandas_obj: pd.Series):
         if not isinstance(pandas_obj.dtype, MoleculeDtype):
             raise TypeError(
                 "subsearch only works on molecule columns (oepandas.MoleculeDtype). If this column has "
@@ -1602,6 +1620,7 @@ class SeriesSubsearchAccessor:
         :param adjustH: Adjust implicit / explicit hydrogens to match query
         :return: Series as molecule
         """
+        # noinspection PyUnresolvedReferences
         return pd.Series(self._obj.array.subsearch(pattern, adjustH=adjustH), dtype=bool)
 
 
@@ -1693,6 +1712,22 @@ class DataFrameAsDesignUnitAccessor:
 ########################################################################################################################
 # Design Unit Array: Series Extensions
 ########################################################################################################################
+
+@register_series_accessor("copy_design_units")
+class SeriesCopyDesignUnitsAccessor:
+    def __init__(self, pandas_obj: pd.Series):
+        if not isinstance(pandas_obj.dtype, DesignUnitDtype):
+            raise TypeError(
+                "copy_design_units only works on design unit columns (oepandas.DesignUnitDtype). If this column has "
+                "design units, use pd.Series.as_design_unit to convert to a design unit column first."
+            )
+
+        self._obj = pandas_obj
+
+    def __call__(self) -> pd.Series:
+        # noinspection PyUnresolvedReferences
+        return pd.Series(self._obj.array.deepcopy(), dtype=DesignUnitDtype())
+
 
 @register_series_accessor("get_ligands")
 class SeriesGetLigandAccessor:
