@@ -31,7 +31,8 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
     def __init__(
             self,
             objs: Iterable[T | None],
-            copy: bool = False
+            copy: bool = False,
+            metadata: dict | None = None
     ) -> None:
         """
         Initialize with objects, ensuring NaN values are stored as None. This also type checks all elements for safety.
@@ -39,6 +40,7 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         :param copy: Whether to copy the objects to this extension array
         """
         self._objs = []
+        self.metadata = metadata or {}
 
         for obj in objs:
 
@@ -75,20 +77,35 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         else:
             self._objs.extend(map(lambda x: None if pd.isna(x) else x, items))
 
-    def copy(self):
+    def copy(self, metadata: bool | dict | None = True):
         """
         Make a shallow copy of this object
+        :param metadata: Metadata for copied object (if dict), or whether to copy the metadata, or None (same as False)
         :return: Shallow copy of this object
         """
-        new_obj = self.__class__(shallow_copy(self._objs))
+        if isinstance(metadata, bool) and metadata:
+            metadata = shallow_copy(self.metadata)
+
+        new_obj = self.__class__(
+            shallow_copy(self._objs),
+            metadata=metadata
+        )
         return new_obj
 
-    def deepcopy(self):
+    def deepcopy(self, metadata: bool | dict | None = True):
         """
         Make a deep copy of this object
+        :param metadata: Metadata for copied object (if dict), or whether to copy the metadata, or None (same as False)
         :return: Deep copy of object
         """
-        new_obj = self.__class__([obj.CreateCopy() for obj in self._objs])
+        if isinstance(metadata, bool) and metadata:
+            metadata = shallow_copy(self.metadata)
+
+        new_obj = self.__class__(
+            [obj.CreateCopy() for obj in self._objs],
+            metadata=metadata
+        )
+
         return new_obj
 
     def fillna(
@@ -135,7 +152,7 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
             else:
                 raise TypeError(f'MoleculeArray cannot determine of object of type {type(obj).__name__} is NaN')
 
-        return self.__class__(filled)
+        return self.__class__(filled, metadata=shallow_copy(self.metadata))
 
     def dropna(self):
         """
@@ -152,7 +169,7 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
                 else:
                     raise TypeError(f'MoleculeArray cannot determine of object of type {type(obj).__name__} is NaN')
 
-        return self.__class__(non_missing)
+        return self.__class__(non_missing, metadata=shallow_copy(self.metadata))
 
     def take(
         self,
@@ -232,7 +249,11 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
 
     # noinspection PyDefaultArgument
     def __deepcopy__(self, memodict={}):
-        return self.deepcopy()
+        return self.deepcopy(metadata=True)
+
+    def __copy__(self):
+        print("COPY!")
+        return self.copy(metadata=True)
 
     @property
     def nbytes(self) -> int:
@@ -330,13 +351,13 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         """
         if isinstance(index, int):
             return self._objs[index]
-        return self.__class__(self._objs[index])
+        return self.__class__(self._objs[index], metadata=shallow_copy(self.metadata))
 
     def __hash__(self):
         return hash(self._objs)
 
     def __reversed__(self):
-        return self.__class__(reversed(self._objs))
+        return self.__class__(reversed(self._objs), metadata=shallow_copy(self.metadata))
 
     def __str__(self):
         return f'{type(self).__name__}(len={len(self._objs)})'

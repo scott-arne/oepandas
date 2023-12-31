@@ -114,7 +114,8 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
     def __init__(
             self,
             mols: None | oechem.OEMolBase | Iterable[oechem.OEMolBase | None],
-            copy: bool = False
+            copy: bool = False,
+            metadata: dict | None = None
     ):
         """
         Initialize
@@ -129,7 +130,7 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
         mols = [oechem.OEMol(mol) if isinstance(mol, oechem.OEGraphMol) else mol for mol in mols]
 
         # Superclass initialization
-        super().__init__(mols, copy=copy)
+        super().__init__(mols, copy=copy, metadata=metadata)
 
     @classmethod
     def _from_sequence(
