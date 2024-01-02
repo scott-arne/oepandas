@@ -28,7 +28,12 @@ class DesignUnitArray(OEExtensionArray[oechem.OEDesignUnit]):
     """
     Custom extension for an array of design units
     """
-    def __init__(self, design_units: oechem.OEDesignUnit | Iterable[oechem.OEDesignUnit], copy=False):
+    def __init__(
+            self,
+            design_units: oechem.OEDesignUnit | Iterable[oechem.OEDesignUnit],
+            copy: bool = False,
+            metadata: dict | None = None
+    ):
         """
         Initialize
         :param design_units: Design unit or an iterable of design units
@@ -38,7 +43,7 @@ class DesignUnitArray(OEExtensionArray[oechem.OEDesignUnit]):
         if isinstance(design_units, oechem.OEDesignUnit):
             design_units = (design_units,)
 
-        super().__init__(design_units, copy=copy)
+        super().__init__(design_units, copy=copy, metadata=metadata)
 
     @classmethod
     def _from_sequence(
@@ -143,7 +148,7 @@ class DesignUnitArray(OEExtensionArray[oechem.OEDesignUnit]):
 
         ifs.close()
 
-        return cls(design_units, copy=False)
+        return cls(design_units, copy=False, metadata={"source": str(fp)})
 
     # --------------------------------------------------------
     # Utilities
