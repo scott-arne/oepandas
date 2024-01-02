@@ -26,7 +26,7 @@ T = TypeVar('T', bound=oechem.OEMolBase | oechem.OEDesignUnit)
 class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
 
     # Each subclass must define this
-    _base_openeye_type = None
+    _base_openeye_type = type(None)
 
     def __init__(
             self,
@@ -102,7 +102,8 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
             metadata = shallow_copy(self.metadata)
 
         new_obj = self.__class__(
-            [obj.CreateCopy() for obj in self._objs],
+            [obj.CreateCopy() if isinstance(obj, self._base_openeye_type) else obj
+             for obj in self._objs],
             metadata=metadata
         )
 
@@ -198,7 +199,7 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         :return: List of molecules
         """
         if copy:
-            return [obj.CreateCopy() for obj in self._objs]
+            return [obj.CreateCopy() if isinstance(obj, self._base_openeye_type) else obj for obj in self._objs]
         return shallow_copy(self._objs)
 
     @property
