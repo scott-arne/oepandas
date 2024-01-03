@@ -1,5 +1,6 @@
 from .design_unit import DesignUnitArray, DesignUnitDtype
 from .molecule import MoleculeArray, MoleculeDtype
+from .display import DisplayDtype, DisplayArray
 
 ########################################################################################################################
 # Pandas Extensions

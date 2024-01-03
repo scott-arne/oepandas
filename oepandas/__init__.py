@@ -1,5 +1,5 @@
 import logging
-from .arrays import DesignUnitArray, DesignUnitDtype, MoleculeArray, MoleculeDtype
+from .arrays import DesignUnitArray, DesignUnitDtype, MoleculeArray, MoleculeDtype, DisplayDtype, DisplayArray
 from .pandas_extensions import (
     read_sdf,
     read_smi,
@@ -10,7 +10,7 @@ from .pandas_extensions import (
 )
 from .exception import FileError, UnsupportedFileFormat
 
-__version__ = '1.1.1'
+__version__ = '1.2.1'
 
 __all__ = [
     "exception",
@@ -19,12 +19,14 @@ __all__ = [
     "DesignUnitDtype",
     "MoleculeDtype",
     "MoleculeArray",
+    "DisplayDtype",
+    "DisplayArray",
     "read_sdf",
     "read_oeb",
     "read_smi",
     "read_molecule_csv",
     "read_oedb",
-    "read_oedu"
+    "read_oedu",
 ]
 
 

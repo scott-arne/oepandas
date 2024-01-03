@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from more_itertools import flatten
 from copy import copy as shallow_copy
-from openeye import oechem
+from openeye import oechem, oedepict
 from abc import ABCMeta
 from typing import Generic, TypeVar, Any, Callable
 from collections.abc import Sized, Iterable, Sequence, Iterator
@@ -20,7 +20,7 @@ log = logging.getLogger("oepandas")
 # Base ExtensionArray definition for OpenEye objects
 ########################################################################################################################
 
-T = TypeVar('T', bound=oechem.OEMolBase | oechem.OEDesignUnit)
+T = TypeVar('T', bound=oechem.OEMolBase | oechem.OEDesignUnit | oedepict.OE2DMolDisplay)
 
 
 class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):

@@ -48,7 +48,7 @@ class DesignUnitArray(OEExtensionArray[oechem.OEDesignUnit]):
     @classmethod
     def _from_sequence(
             cls,
-            scalars: Iterable[oechem.OEDesignUnit | bytes | str],
+            scalars: Iterable[oechem.OEDesignUnit | bytes | str | None],
             *,
             dtype: Dtype | None = None,
             copy: bool = False,
