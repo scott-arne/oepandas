@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from openeye import oechem
-from typing import Any
+from typing import Any, Generator
 from collections.abc import Iterable, Sequence
 from pandas.core.dtypes.dtypes import PandasExtensionDtype
 from pandas.api.extensions import register_extension_dtype
@@ -19,6 +19,29 @@ log = logging.getLogger("oepandas")
 ########################################################################################################################
 # Design Unit Array
 ########################################################################################################################
+
+def _read_oedus_from_file(fp: Path) -> Generator[oechem.OEDesignUnit, None, None]:
+    """
+    Generator over OEDesignUnit objects from a file
+    :param fp: Path to file
+    :return: Generator over design units
+    """
+    du = oechem.OEDesignUnit()
+    ifs = oechem.oeifstream(str(fp))
+    while oechem.OEReadDesignUnit(ifs, du):
+        yield du
+    ifs.close()
+
+
+def _read_oedus_from_directory(directory: Path) -> Generator[oechem.OEDesignUnit, None, None]:
+    """
+    Generator over OEDesignUnit objects in multiple .oedu files in a directory
+    :param directory: Path to directory
+    :return: Generator over design units
+    """
+    for fp in directory.glob("*.oedu"):
+        yield from _read_oedus_from_file(fp)
+
 
 class DesignUnitArray(OEExtensionArray[oechem.OEDesignUnit]):
 
@@ -139,14 +162,12 @@ class DesignUnitArray(OEExtensionArray[oechem.OEDesignUnit]):
             raise TypeError("OEDesignUnit is the only design unit type currently available")
 
         design_units = []
-        du = oechem.OEDesignUnit()
 
-        ifs = oechem.oeifstream(str(fp))
+        filepath = Path(fp)
+        reader = _read_oedus_from_file if filepath.is_file() else _read_oedus_from_directory
 
-        while oechem.OEReadDesignUnit(ifs, du):
+        for du in reader(filepath):
             design_units.append(du.CreateCopy())
-
-        ifs.close()
 
         return cls(design_units, copy=False, metadata={"source": str(fp)})
 

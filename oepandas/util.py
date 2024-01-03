@@ -5,12 +5,9 @@ import gzip as python_gzip
 import pandas as pd
 from pathlib import Path
 from collections import Counter
-from collections.abc import Iterable
 from typing import Callable
 from openeye import oechem
 from dataclasses import dataclass
-# noinspection PyProtectedMember
-from pandas._typing import Dtype
 from .exception import UnsupportedFileFormat
 
 log = logging.getLogger("oepandas")
