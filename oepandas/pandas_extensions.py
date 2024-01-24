@@ -432,7 +432,14 @@ def _read_molecules_to_dataframe(
         if numeric_columns is not None:
             for col, dtype in numeric_columns.items():
                 if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors="ignore", downcast=dtype)
+
+                    try:
+                        df[col] = pd.to_numeric(df[col], downcast=dtype)
+
+                    # We do not care if the numeric cast failed
+                    except:  # noqa
+                        pass
+
                 else:
                     log.warning(f'Column not found in DataFrame: {col}')
 
@@ -1740,12 +1747,13 @@ class SeriesGetLigandAccessor:
 
         self._obj = pandas_obj
 
-    def __call__(self):
+    def __call__(self, *, clear_titles: bool = False) -> pd.Series:
         """
         Get ligands from design units
+        :param clear_titles: Clear ligand titles
         :return: Molecule series with ligands
         """
-        return pd.Series(self._obj.array.get_ligands(), dtype=MoleculeDtype())
+        return pd.Series(self._obj.array.get_ligands(clear_titles=clear_titles), dtype=MoleculeDtype())
 
 
 @register_series_accessor("get_proteins")
@@ -1759,12 +1767,13 @@ class SeriesGetProteinAccessor:
 
         self._obj = pandas_obj
 
-    def __call__(self):
+    def __call__(self, *, clear_titles: bool = False):
         """
         Get ligands from design units
+        :param clear_titles: Clear protein titles
         :return: Molecule series with ligands
         """
-        return pd.Series(self._obj.array.get_proteins(), dtype=MoleculeDtype())
+        return pd.Series(self._obj.array.get_proteins(clear_titles=clear_titles), dtype=MoleculeDtype())
 
 
 @register_series_accessor("get_components")

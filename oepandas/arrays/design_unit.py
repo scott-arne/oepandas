@@ -188,27 +188,39 @@ class DesignUnitArray(OEExtensionArray[oechem.OEDesignUnit]):
             mols.append(mol)
         return MoleculeArray(mols)
 
-    def get_ligands(self) -> MoleculeArray:
+    def get_ligands(self, *, clear_titles: bool = False) -> MoleculeArray:
         """
         Get a molecule array of just the ligands
+        :param clear_titles: Clear ligand titles
         :return:  Molecule array of just ligands
         """
         ligs = []
         for du in self:
             lig = oechem.OEMol()
             du.GetLigand(lig)
+
+            if clear_titles:
+                lig.SetTitle('')
+                lig.GetActive().SetTitle('')
+
             ligs.append(lig)
         return MoleculeArray(ligs)
 
-    def get_proteins(self) -> MoleculeArray:
+    def get_proteins(self, *, clear_titles: bool = False) -> MoleculeArray:
         """
         Get a molecule array of just the proteins
+        :param clear_titles: Clear ligand titles
         :return: Molecule array of just proteins
         """
         prots = []
         for du in self:
             prot = oechem.OEMol()
             du.GetProtein(prot)
+
+            if clear_titles:
+                prot.SetTitle('')
+                prot.GetActive().SetTitle('')
+
             prots.append(prot)
         return MoleculeArray(prots)
 

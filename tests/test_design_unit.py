@@ -96,3 +96,8 @@ class TestPandasDesignUnitExtensions(unittest.TestCase):
         # Convert to design unit
         df.as_design_unit(columns=["Design_Unit"], inplace=True)
         self.assertIsInstance(df.dtypes["Design_Unit"], DesignUnitDtype)
+
+    def test_xxxx(self):
+        df = oepd.read_oedu("/Users/johnss51/Data/EGFR/2023-12-05_Structures/design_units")
+        df["Ligand"] = df.Design_Unit.get_ligands()
+        print(len(df))
