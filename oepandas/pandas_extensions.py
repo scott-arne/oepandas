@@ -932,7 +932,7 @@ class DataFrameAsMoleculeAccessor:
             *,
             molecule_format: dict[str, str] | dict[str, int] | str | int | None = None,
             inplace=False
-    ):
+    ) -> pd.DataFrame:
         # Default format is SMILES if none is specified
         molecule_format = molecule_format or oechem.OEFormat_SMI
 
@@ -1503,6 +1503,33 @@ class SeriesAsMoleculeAccessor:
         # noinspection PyProtectedMember
         arr = MoleculeArray._from_sequence(self._obj, molecule_format=_fmt.oeformat)
         return pd.Series(arr, index=self._obj.index, dtype=MoleculeDtype())
+
+
+@register_series_accessor("to_molecule")
+class DataFrameToMoleculeAccessor:
+    """
+    Convert a column to molecules and return a series object
+    """
+
+    def __init__(self, pandas_obj: pd.Series):
+        self._obj = pandas_obj
+
+    def __call__(
+            self,
+            *,
+            molecule_format: dict[str, str] | dict[str, int] | str | int | None = None,
+    ) -> pd.Series:
+        # Default format is SMILES if none is specified
+        molecule_format = molecule_format or oechem.OEFormat_SMI
+
+        # Read the array from a sequence of strings
+        # noinspection PyProtectedMember
+        arr = MoleculeArray._from_sequence_of_strings(
+            self._obj,
+            molecule_format=molecule_format
+        )
+
+        return pd.Series(arr, dtype=MoleculeDtype())
 
 
 @register_series_accessor("to_molecule_bytes")

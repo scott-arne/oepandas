@@ -192,7 +192,7 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
             *,
             dtype: Dtype | None = None,
             copy: bool = False,
-            molecule_format: int | None = None,
+            molecule_format: int | str | None = None,
             b64decode: bool = False) -> 'MoleculeArray':
         """
         Read molecules form a sequence of strings (this is an optimization of _from_sequence, which does more
@@ -200,6 +200,7 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
         :param strings: Sequence of strings
         :param dtype: Not used (here for API compatibility with Pandas)
         :param copy: Not used (here for API compatibility with Pandas)
+        :param molecule_format: Molecule file format
         :param b64decode: Force base64 decoding of molecule strings
         :return: Array of molecules
         """
@@ -219,6 +220,60 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
             mols.append(mol)
 
         return cls(mols, copy=False)
+
+    @classmethod
+    def from_sequence_of_strings(
+            cls,
+            strings: Sequence[str],
+            *,
+            dtype: Dtype | None = None,
+            copy: bool = False,
+            molecule_format: int | str | None = None,
+            b64decode: bool = False
+    ) -> 'MoleculeArray':
+        """
+        Public alias of _from_sequence_of_strings
+        :param strings: Sequence of strings
+        :param dtype: Not used (here for API compatibility with Pandas)
+        :param copy: Not used (here for API compatibility with Pandas)
+        :param molecule_format: Molecule file format
+        :param b64decode: Force base64 decoding of molecule strings
+        :return: Array of molecules
+        """
+        return cls._from_sequence_of_strings(
+            strings,
+            dtype=dtype,
+            copy=copy,
+            molecule_format=molecule_format,
+            b64decode=b64decode
+        )
+
+    @classmethod
+    def from_sequence(
+            cls,
+            scalars: Iterable[Any],
+            *,
+            dtype: Dtype | None = None,
+            copy: bool = False,
+            molecule_format: str | int | None = None,
+            gzip: bool = False
+    ) -> 'MoleculeArray':
+        """
+        Public alias of _from_sequence
+        :param scalars: Sequence of objects
+        :param dtype: Not used (here for API compatibility with Pandas)
+        :param copy: Not used (here for API compatibility with Pandas)
+        :param molecule_format: Molecule file format
+        :param gzip: Whether the objects are gzipped
+        :return: Array of molecules
+        """
+        return cls._from_sequence(
+            scalars,
+            dtype=dtype,
+            copy=copy,
+            molecule_format=molecule_format,
+            gzip=gzip
+        )
 
     @property
     def dtype(self) -> PandasExtensionDtype:
