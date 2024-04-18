@@ -13,7 +13,7 @@ from setuptools import setup, find_packages
 requirements = [
     "pandas>=2.1.0",
     "numpy",
-    "openeye-toolkits>=2023.1.0"
+    "openeye-toolkits>=2023.1.0",
     "more-itertools"
 ]
 
