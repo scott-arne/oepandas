@@ -65,6 +65,24 @@ df = oepd.read_sdf("tests/assets/5.sdf")
 df.head()
 ```
 
+Take a gander:
+
+```text
+                                            Molecule          TITLE  \
+0  <oechem.OEGraphMol; proxy of <Swig Object of t...        Aspirin   
+1  <oechem.OEGraphMol; proxy of <Swig Object of t...      Ibuprofen   
+2  <oechem.OEGraphMol; proxy of <Swig Object of t...  Acetaminophen   
+3  <oechem.OEGraphMol; proxy of <Swig Object of t...       Caffeine   
+4  <oechem.OEGraphMol; proxy of <Swig Object of t...       Diazepam   
+
+       MolWt  NumAcceptors  NumDonors  
+0  180.15742             2          1  
+1  206.28082             1          1  
+2  151.16256             1          2  
+3  194.19060             3          0  
+4  284.74022             2          0  
+```
+
 Everything looks exactly the same as above with one exception. Instead of a SMILES column, we now have a Molecule
 column. This is because the CSV had a column explicitly called SMILES that we converted to molecules, whereas the
 SD file just has a bunch of molecules in it. We can control the name of the molecule (and title) columns with
