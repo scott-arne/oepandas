@@ -482,12 +482,10 @@ def read_molecule_csv(
     na_values: Sequence[str] | Mapping[str, Sequence[str]] | None = None,
     keep_default_na: bool = True,
     na_filter: bool = True,
-    verbose: bool = False,
     skip_blank_lines: bool = True,
     # Datetime Handling
     parse_dates: bool | Sequence[Hashable] | None = None,
     infer_datetime_format: bool | lib.NoDefault = lib.no_default,
-    keep_date_col: bool = False,
     date_parser: Callable | lib.NoDefault = lib.no_default,  # noqa
     date_format: str | None = None,
     dayfirst: bool = False,
@@ -511,7 +509,6 @@ def read_molecule_csv(
     # Error Handling
     on_bad_lines: str = "error",
     # Internal
-    delim_whitespace: bool = False,
     low_memory: bool = _c_parser_defaults["low_memory"],
     memory_map: bool = False,
     float_precision: Literal["high", "legacy"] | None = None,
@@ -544,11 +541,9 @@ def read_molecule_csv(
         na_values=na_values,
         keep_default_na=keep_default_na,
         na_filter=na_filter,
-        verbose=verbose,
         skip_blank_lines=skip_blank_lines,
         parse_dates=parse_dates,
         infer_datetime_format=infer_datetime_format,
-        keep_date_col=keep_date_col,
         date_parser=date_parser,
         date_format=date_format,
         dayfirst=dayfirst,
@@ -568,7 +563,6 @@ def read_molecule_csv(
         encoding_errors=encoding_errors,
         dialect=dialect,
         on_bad_lines=on_bad_lines,
-        delim_whitespace=delim_whitespace,
         low_memory=low_memory,
         memory_map=memory_map,
         float_precision=float_precision,
