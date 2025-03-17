@@ -7,7 +7,7 @@ def test(c):
 
 
 @task
-def msd_upload(c):
+def upload(c):
     c.run("rm -rf dist")
-    c.run("python setup.py sdist --formats=gztar")
-    c.run("scp dist/*.tar.gz inca02.pri.bms.com:/web/msdpypi/packages/")
+    c.run("python -m build")
+    c.run("scp dist/* inca02.pri.bms.com:/web/msdpypi/packages/")
