@@ -115,7 +115,8 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
             self,
             mols: None | oechem.OEMolBase | Iterable[oechem.OEMolBase | None],
             copy: bool = False,
-            metadata: dict | None = None
+            metadata: dict | None = None,
+            deepcopy: bool = False
     ):
         """
         Initialize
@@ -126,11 +127,25 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
         if isinstance(mols, oechem.OEMolBase):
             mols = (mols,)
 
-        # Handle OEGraphMol types
-        mols = [oechem.OEMol(mol) if isinstance(mol, oechem.OEGraphMol) else mol for mol in mols]
+        # Under the hood we only work with oechem.OEMol for consistency
+        oemols = []
+
+        for mol in mols:
+
+            # Never store OEGraphMol under the hood (for consistency)
+            if isinstance(mol, oechem.OEGraphMol):
+                oemols.append(oechem.OEMol(mol))
+
+            # If we are copying
+            elif deepcopy:
+                oemols.append(oechem.OEMol(mol))
+
+            # Else we are just using references
+            else:
+                oemols.append(mol)
 
         # Superclass initialization
-        super().__init__(mols, copy=copy, metadata=metadata)
+        super().__init__(oemols, copy=copy, metadata=metadata)
 
     @classmethod
     def _from_sequence(
