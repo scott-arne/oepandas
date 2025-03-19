@@ -128,24 +128,43 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
             mols = (mols,)
 
         # Under the hood we only work with oechem.OEMol for consistency
-        oemols = []
+        processed = []
 
         for mol in mols:
 
-            # Never store OEGraphMol under the hood (for consistency)
-            if isinstance(mol, oechem.OEGraphMol):
-                oemols.append(oechem.OEMol(mol))
+            # None values are ok
+            if pd.isna(mol):
+                processed.append(None)
 
-            # If we are copying
+            # Never store OEGraphMol under the hood (for consistency)
+            elif isinstance(mol, oechem.OEGraphMol):
+                processed.append(oechem.OEMol(mol))
+
+            # Else if we are copying
             elif deepcopy:
-                oemols.append(oechem.OEMol(mol))
+
+                if isinstance(mol, oechem.OEMolBase):
+                    processed.append(oechem.OEMol(mol))
+
+                else:
+                    # This would be an error
+                    processed.append(None)
 
             # Else we are just using references
             else:
-                oemols.append(mol)
+                processed.append(mol)
 
         # Superclass initialization
-        super().__init__(oemols, copy=copy, metadata=metadata)
+        super().__init__(processed, copy=copy, metadata=metadata)
+
+    @property
+    def ndim(self):
+        return 1
+
+    @property
+    def shape(self):
+      return (len(self),)
+
 
     @classmethod
     def _from_sequence(
@@ -293,6 +312,15 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
     @property
     def dtype(self) -> PandasExtensionDtype:
         return MoleculeDtype()
+
+    # def take(self, indices, allow_fill=False, fill_value=None):
+    #     return self.take(indices, allow_fill=allow_fill, fillvalue=fill_value)
+
+    def copy(self):
+        return MoleculeArray(self._objs)
+
+    def deepcopy(self, metadata: bool | dict | None = True):
+        return MoleculeArray(self._objs, metadata=metadata, deepcopy=True)
 
     # ------------------------------------------------------------
     # I/O
