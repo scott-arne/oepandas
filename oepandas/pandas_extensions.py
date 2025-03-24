@@ -305,6 +305,7 @@ def _read_molecules_to_dataframe(
     if numeric_columns is not None:
         if isinstance(numeric_columns, str):
             numeric_columns = {numeric_columns: None}
+
         elif isinstance(numeric_columns, Iterable) and not isinstance(numeric_columns, dict):
             numeric_columns = {col: None for col in numeric_columns}
 
@@ -431,10 +432,17 @@ def _read_molecules_to_dataframe(
         # Cast numeric columns
         if numeric_columns is not None:
             for col, dtype in numeric_columns.items():
+
+                if issubclass(dtype, float):
+                    dtype = "float"
+
+                elif issubclass(dtype, int):
+                    dtype = "integer"
+
                 if col in df.columns:
 
                     try:
-                        df[col] = pd.to_numeric(df[col], downcast=dtype)
+                        df[col] = pd.to_numeric(df[col], errors="coerce", downcast=dtype)
 
                     # We do not care if the numeric cast failed
                     except:  # noqa
@@ -1049,14 +1057,17 @@ class WriteToSDFAccessor:
         # Make sure we're working with a list of columns
         if columns is None:
             columns = list(self._obj.columns)
+
         elif isinstance(columns, str):
             columns = [columns]
+
         else:
             columns = list(columns)
 
         # Validate primary molecule column
         if primary_molecule_column not in self._obj.columns:
             raise KeyError(f'Primary molecule column {primary_molecule_column} not found in DataFrame')
+
         if not isinstance(self._obj[primary_molecule_column].dtype, MoleculeDtype):
             raise TypeError(f'Primary molecule column {primary_molecule_column} is not a MoleculeDtype')
 
@@ -1091,18 +1102,42 @@ class WriteToSDFAccessor:
             ofs.Setgz(gzip or is_gz(fp))
 
             for idx, row in self._obj.iterrows():
-                mol = row[primary_molecule_column].CreateCopy()
+
+                # Primary molecule
+                primary_mol = row[primary_molecule_column]
+
+                if primary_mol is None:
+
+                    primary_mol = oechem.OEGraphMol()
+
+                else:
+
+                    if isinstance(primary_mol, oechem.OEGraphMol):
+                        primary_mol = oechem.OEGraphMol(primary_mol)
+
+                    elif isinstance(primary_mol, oechem.OEMol):
+                        primary_mol = oechem.OEGraphMol(primary_mol) if primary_mol.NumConfs() == 1 else \
+                                oechem.OEMol(primary_mol)
+
+                    else:
+                        log.warning(
+                            "Not an OpenEye molecule object {} (type: {})",
+                            str(primary_mol),
+                            type(primary_mol).__name__
+                        )
+
+                        primary_mol = oechem.OEGraphMol()
 
                 # Set the title
                 if title_column is not None:
-                    mol.SetTitle(str(row[title_column]))
+                    primary_mol.SetTitle(str(row[title_column]))
 
                 for col in columns:
 
                     # Secondary molecule column
                     if col in secondary_molecule_cols:
                         oechem.OESetSDData(
-                            mol,
+                            primary_mol,
                             col,
                             secondary_molecule_to_string(row[col])
                         )
@@ -1110,13 +1145,13 @@ class WriteToSDFAccessor:
                     # Everything else (except our primary molecule column)
                     elif col != primary_molecule_column:
                         oechem.OESetSDData(
-                            mol,
+                            primary_mol,
                             col,
                             str(row[col])
                         )
 
                 # Write out the molecule
-                oechem.OEWriteMolecule(ofs, mol)
+                oechem.OEWriteMolecule(ofs, primary_mol)
 
 
 @register_dataframe_accessor("to_smi")

@@ -10,7 +10,7 @@ from .pandas_extensions import (
 )
 from .exception import FileError, UnsupportedFileFormat
 
-__version__ = '1.2.7'
+__version__ = '1.2.8'
 
 __all__ = [
     "exception",
