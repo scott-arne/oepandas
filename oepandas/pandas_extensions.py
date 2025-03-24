@@ -433,10 +433,10 @@ def _read_molecules_to_dataframe(
         if numeric_columns is not None:
             for col, dtype in numeric_columns.items():
 
-                if issubclass(dtype, float):
+                if issubclass(type(dtype), float):
                     dtype = "float"
 
-                elif issubclass(dtype, int):
+                elif issubclass(type(dtype), int):
                     dtype = "integer"
 
                 if col in df.columns:
