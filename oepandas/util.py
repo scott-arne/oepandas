@@ -106,7 +106,7 @@ def create_molecule_to_bytes_writer(
                 """
                 retval = oechem.OEMolToSmiles(m).encode('utf-8')
                 if gzip:
-                    return base64.b64encode(python_gzip.compress(retval.encode('utf-8')))
+                    return base64.b64encode(python_gzip.compress(retval))  # retval is already bytes
                 return retval
 
             return molecule_to_bytes
@@ -231,8 +231,19 @@ def predominant_type(series: pd.Series, sample_size: int = 25) -> None | type:
     :param sample_size: Inspect at most this many rows
     :return: Predominant class found in the DataFrame sample
     """
+    # Filter out null values
+    non_null_series = series[series.notnull()]
+    
+    if len(non_null_series) == 0:
+        return None
+    
     # Take a random sample of non-empty rows and test if these are molecules
-    members = [type(x) for x in series[series.notnull()].sample(n=min(sample_size, len(series)))]
+    # Don't sample more than available
+    sample_n = min(sample_size, len(non_null_series))
+    if sample_n == 0:
+        return None
+        
+    members = [type(x) for x in non_null_series.sample(n=sample_n)]
     if len(members) > 0:
         counts = Counter(members)
         return max(counts, key=counts.get)

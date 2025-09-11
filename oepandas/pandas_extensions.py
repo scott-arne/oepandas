@@ -1,31 +1,19 @@
 import logging
-import csv
 import numpy as np
 import pandas as pd
 from pathlib import Path
 from openeye import oechem
-from typing import Callable, Literal, Mapping, Protocol
-from collections.abc import Iterable, Sequence, Hashable
-# noinspection PyProtectedMember
+from typing import Literal, Protocol
+from collections.abc import Iterable
 from pandas.api.types import is_numeric_dtype, is_float, is_integer
 from pandas.core.dtypes.dtypes import PandasExtensionDtype
-# noinspection PyProtectedMember
-from pandas.io.parsers.readers import _c_parser_defaults
-# noinspection PyProtectedMember
-from pandas._libs import lib
 from pandas.api.extensions import register_dataframe_accessor, register_series_accessor
 # noinspection PyProtectedMember
 from pandas._typing import (
     FilePath,
-    IndexLabel,
     ReadBuffer,
-    HashableT,
-    CompressionOptions,
-    CSVEngine,
+    ReadCsvBuffer,
     Dtype,
-    DtypeArg,
-    DtypeBackend,
-    StorageOptions,
 )
 from .util import (
     get_oeformat,
@@ -37,6 +25,7 @@ from .arrays import MoleculeArray, MoleculeDtype, DesignUnitArray, DesignUnitDty
 # noinspection PyProtectedMember
 from .arrays.molecule import _read_molecules
 from .exception import FileError
+
 
 log = logging.getLogger("oepandas")
 
@@ -172,6 +161,48 @@ class Dataset:
         del self.columns[key]
 
 
+def _series_to_molecule_array(series: pd.Series, molecule_format: int = oechem.OEFormat_SMI) -> MoleculeArray:
+    """
+    Convert a series to a molecule array
+    :param series: Pandas Series
+    :return: Molecule array
+    """
+    mols = []
+    for val in series:
+
+        if pd.isna(val):
+            mols.append(None)
+
+        elif isinstance(val, (oechem.OEGraphMol, oechem.OEMol)):
+            if isinstance(val, oechem.OEGraphMol):
+                mols.append(oechem.OEMol(val))
+            else:
+                mols.append(val)
+
+        elif molecule_format == oechem.OEFormat_SMI:
+            if isinstance(val, str):
+                m = oechem.OEMol()
+
+                if not oechem.OEParseSmiles(m, val):
+                    log.warning("Failed to parse SMILES in series: %s", val)
+                    mols.append(None)
+
+                else:
+                    mols.append(m)
+            else:
+                raise TypeError(f'Can only parse SMILES from str, but got type "{type(val).__name__}"')
+
+        else:
+            m = oechem.OEMol()
+            if not oechem.OEReadMolFromBytes(m, molecule_format, False, val):
+                log.warning("Failed to read molecule in series: %s", str(val))
+                mols.append(None)
+
+            else:
+                mols.append(m)
+
+    return MoleculeArray(mols)
+
 ########################################################################################################################
 # Molecule Array: I/O
 ########################################################################################################################
@@ -193,50 +224,93 @@ def _add_smiles_columns(
     :param molecule_columns: Column(s) that the user requested
     :param add_smiles: Column definition(s) for adding SMILES
     """
-    # Map of molecule column -> SMILES column
-    add_smiles_map = {}
+    add_smiles_map: dict[str, str] = {}
 
-    if not isinstance(add_smiles, dict):
+    def is_mol_col(col_: str) -> bool:
+        return col_ in df.columns and isinstance(df.dtypes[col_], MoleculeDtype)
 
-        if isinstance(add_smiles, bool) and add_smiles:
-            # We only add SMILES to the first molecule column with the suffix " SMILES"
-            col = molecule_columns if isinstance(molecule_columns, str) else next(iter(molecule_columns))
-            add_smiles_map[col] = f'{col} SMILES'
+    def resolve_primary_mol_column():
+        # If user explicitly provided molecule_columns, prefer its first entry
+        if isinstance(molecule_columns, str):
+            return molecule_columns if is_mol_col(molecule_columns) else None
 
-        elif isinstance(add_smiles, str):
-            if add_smiles in df.columns:
-                if isinstance(df.dtypes[add_smiles], MoleculeDtype):
-                    add_smiles_map[add_smiles] = f'{add_smiles} SMILES'
-                else:
-                    log.warning(f'Column {add_smiles} is not a MoleculeDtype')
-            else:
-                log.warning(f'Column {add_smiles} not found in DataFrame')
+        elif hasattr(molecule_columns, "__iter__") and not isinstance(molecule_columns, str):
+            for c in molecule_columns:
+                if is_mol_col(c):
+                    return c
 
-        elif isinstance(add_smiles, Iterable):
-            for col in add_smiles:
-                if col in df.columns:
-                    if isinstance(df.dtypes[col], MoleculeDtype):
-                        add_smiles_map[col] = f'{col} SMILES'
-                    else:
-                        log.warning(f'Column {col} is not a MoleculeDtype')
-                else:
-                    log.warning(f'Column {col} not found in DataFrame')
+        # Fallback: autodetect first MoleculeDtype column in df
+        for c in df.columns:
+            if is_mol_col(c):
+                return c
+        return None
 
-    # isinstance(add_smiles, dict)
-    else:
-        for col, smiles_col in add_smiles.items():
-            if col in df.columns:
-                if isinstance(df.dtypes[col], MoleculeDtype):
-                    add_smiles_map[col] = smiles_col
-                else:
-                    log.warning(f'Column {col} is not a MoleculeDtype')
-            else:
-                log.warning(f'Column {col} not found in DataFrame')
+    # Build the mapping from molecule column -> desired SMILES column name
+    if isinstance(add_smiles, dict):
 
-    # Add the SMILES column(s)
-    # We always add canonical isomeric SMILES
-    for col, smiles_col in add_smiles_map.items():
-        df[smiles_col] = df[col].to_smiles(flavor=oechem.OESMILESFlag_ISOMERIC)
+        for src, target in add_smiles.items():
+            if src not in df.columns:
+                log.warning("Column %s not found in DataFrame", src)
+                continue
+
+            if not is_mol_col(src):
+                log.warning("Column %s is not a MoleculeDtype", src)
+                continue
+            add_smiles_map[src] = target
+
+    elif isinstance(add_smiles, bool):
+        if not add_smiles:
+            return  # nothing to do
+
+        primary = resolve_primary_mol_column()
+
+        if primary is None:
+            log.warning("No molecule column found to generate SMILES for")
+            return
+
+        add_smiles_map[primary] = f"{primary} SMILES"
+
+    elif isinstance(add_smiles, str):
+        if add_smiles not in df.columns:
+            log.warning("Column %s not found in DataFrame", add_smiles)
+        elif not is_mol_col(add_smiles):
+            log.warning("Column %s is not a MoleculeDtype", add_smiles)
+        else:
+            add_smiles_map[add_smiles] = f"{add_smiles} SMILES"
+
+    else:  # Iterable (but not string)
+        for col in add_smiles:
+            if not isinstance(col, str):
+                log.warning("Skipping non-string column specification: %r", col)
+                continue
+            if col not in df.columns:
+                log.warning("Column %s not found in DataFrame", col)
+                continue
+            if not is_mol_col(col):
+                log.warning("Column %s is not a MoleculeDtype", col)
+                continue
+            add_smiles_map[col] = f"{col} SMILES"
+
+    if not add_smiles_map:
+        # Nothing valid to do
+        return
+
+    # Create SMILES columns
+    for src_col, smiles_col in add_smiles_map.items():
+        series = df[src_col]
+
+        if not isinstance(series.dtype, MoleculeDtype):
+            log.warning("Skipping SMILES generation for non-molecule column %s", src_col)
+            continue
+
+        try:
+            smiles = series.array.to_smiles(flavor=oechem.OESMILESFlag_ISOMERIC)  # noqa
+
+        except Exception as e:
+            log.debug("Failed to generate SMILES for column %s: %s", src_col, e)
+            continue
+
+        df[smiles_col] = pd.Series(smiles, index=df.index, dtype=object)
 
 
 # Types
@@ -249,6 +323,7 @@ class MoleculeArrayReaderProtocol(Protocol):
     ) -> MoleculeArray: ...
 
 
+# noinspection LongLine
 def _read_molecules_to_dataframe(
     reader: MoleculeArrayReaderProtocol,
     filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
@@ -262,7 +337,7 @@ def _read_molecules_to_dataframe(
     generic_data=True,
     sd_data=True,
     usecols: None | str | Iterable[str] = None,
-    numeric_columns: None | str | dict[str, Literal["integer", "signed", "unsigned", "float"] | None] | Iterable[str] = None,  # noqa
+    numeric_columns: None | str | dict[str, Literal["integer", "signed", "unsigned", "float"] | None] | Iterable[str] = None,
     conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default",
     combine_tags: Literal["prefix", "prefer_sd", "prefer_generic"] = "prefix",
     conf_index_column_name: str = "ConfIdx",
@@ -408,29 +483,30 @@ def _read_molecules_to_dataframe(
 
         if molecule_columns is not None:
             if isinstance(molecule_columns, str) and molecule_columns != molecule_column_name:
-                if molecule_columns in df.columns:
-                    df.as_molecule(molecule_column_name, inplace=True)
-                else:
-                    log.warning(f'Column not found in DataFrame: {molecule_columns}')
+                    if molecule_columns in df.columns:
+                        df.as_molecule(molecule_columns, inplace=True)  # noqa
+                    else:
+                        log.warning(f'Column not found in DataFrame: {molecule_columns}')
 
             elif isinstance(molecule_columns, Iterable):
                 for col in molecule_columns:
 
                     # Check if we have been asked to make this column numeric later
-                    if col in numeric_columns:
+                    if numeric_columns is not None and col in numeric_columns:
                         raise KeyError(f'Cannot make molecule column {col} numeric')
 
                     if col in df.columns:
 
                         # We don't need to convert the primary molecule column
                         if col != molecule_column_name:
-                            df.as_molecule(col, inplace=True)
+                            df.as_molecule(col, inplace=True)  # noqa
 
                     else:
                         log.warning(f'Column not found in DataFrame: {col}')
 
         # Cast numeric columns
         if numeric_columns is not None:
+
             for col, dtype in numeric_columns.items():
 
                 if issubclass(type(dtype), float):
@@ -442,10 +518,11 @@ def _read_molecules_to_dataframe(
                 if col in df.columns:
 
                     try:
-                        df[col] = pd.to_numeric(df[col], errors="coerce", downcast=dtype)
+                        df[col] = pd.to_numeric(df[col], errors="coerce", downcast=dtype)  # noqa
 
                     # We do not care if the numeric cast failed
-                    except:  # noqa
+                    except Exception as e:  # noqa
+                        log.debug(f"Numeric downcast failed for column {col}: {e}")
                         pass
 
                 else:
@@ -464,126 +541,25 @@ def _read_molecules_to_dataframe(
 
 
 def read_molecule_csv(
-    filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
+    filepath_or_buffer: FilePath | ReadCsvBuffer[bytes] | ReadCsvBuffer[str],
     molecule_columns: str | dict[str, int] | dict[str, str] | Literal["detect"],
     *,
     add_smiles: None | bool | str | Iterable[str] = None,
-    # pd.read_csv options here for type completion
-    sep: str | None | lib.NoDefault = lib.no_default,
-    delimiter: str | None | lib.NoDefault = None,
-    # Column and Index Locations and Names
-    header: int | Sequence[int] | None | Literal["infer"] = "infer",
-    names: Sequence[Hashable] | None | lib.NoDefault = lib.no_default,
-    index_col: IndexLabel | Literal[False] | None = None,
-    usecols: list[HashableT] | Callable[[Hashable], bool] | None = None,
-    # General Parsing Configuration
-    dtype: DtypeArg | None = None,
-    engine: CSVEngine | None = None,
-    converters: Mapping[Hashable, Callable] | None = None,
-    true_values: list | None = None,
-    false_values: list | None = None,
-    skipinitialspace: bool = False,
-    skiprows: list[int] | int | Callable[[Hashable], bool] | None = None,
-    skipfooter: int = 0,
-    nrows: int | None = None,
-    # NA and Missing Data Handling
-    na_values: Sequence[str] | Mapping[str, Sequence[str]] | None = None,
-    keep_default_na: bool = True,
-    na_filter: bool = True,
-    skip_blank_lines: bool = True,
-    # Datetime Handling
-    parse_dates: bool | Sequence[Hashable] | None = None,
-    infer_datetime_format: bool | lib.NoDefault = lib.no_default,
-    date_parser: Callable | lib.NoDefault = lib.no_default,  # noqa
-    date_format: str | None = None,
-    dayfirst: bool = False,
-    cache_dates: bool = True,
-    # Iteration
-    iterator: bool = False,
-    chunksize: int | None = None,
-    # Quoting, Compression, and File Format
-    compression: CompressionOptions = "infer",
-    thousands: str | None = None,
-    decimal: str = ".",
-    lineterminator: str | None = None,
-    quotechar: str = '"',
-    quoting: int = csv.QUOTE_MINIMAL,
-    doublequote: bool = True,
-    escapechar: str | None = None,
-    comment: str | None = None,
-    encoding: str | None = None,
-    encoding_errors: str | None = "strict",
-    dialect: str | csv.Dialect | None = None,
-    # Error Handling
-    on_bad_lines: str = "error",
-    # Internal
-    low_memory: bool = _c_parser_defaults["low_memory"],
-    memory_map: bool = False,
-    float_precision: Literal["high", "legacy"] | None = None,
-    storage_options: StorageOptions | None = None,
-    dtype_backend: DtypeBackend | lib.NoDefault = lib.no_default
+    **args
 ) -> pd.DataFrame:
     """
     Read a delimited text file with molecules. Note that this wraps the standard Pandas CSV reader and then converts
     the molecule column(s).
     """
     # Deletegate the CSV reading to pandas
-    # noinspection PyTypeChecker
-    df: pd.DataFrame = pd.read_csv(
-        filepath_or_buffer,
-        sep=sep,
-        delimiter=delimiter,
-        header=header,
-        names=names,
-        index_col=index_col,
-        usecols=usecols,
-        dtype=dtype,
-        engine=engine,
-        converters=converters,
-        true_values=true_values,
-        false_values=false_values,
-        skipinitialspace=skipinitialspace,
-        skiprows=skiprows,
-        skipfooter=skipfooter,
-        nrows=nrows,
-        na_values=na_values,
-        keep_default_na=keep_default_na,
-        na_filter=na_filter,
-        skip_blank_lines=skip_blank_lines,
-        parse_dates=parse_dates,
-        infer_datetime_format=infer_datetime_format,
-        date_parser=date_parser,
-        date_format=date_format,
-        dayfirst=dayfirst,
-        cache_dates=cache_dates,
-        iterator=iterator,
-        chunksize=chunksize,
-        compression=compression,
-        thousands=thousands,
-        decimal=decimal,
-        lineterminator=lineterminator,
-        quotechar=quotechar,
-        quoting=quoting,
-        doublequote=doublequote,
-        escapechar=escapechar,
-        comment=comment,
-        encoding=encoding,
-        encoding_errors=encoding_errors,
-        dialect=dialect,
-        on_bad_lines=on_bad_lines,
-        low_memory=low_memory,
-        memory_map=memory_map,
-        float_precision=float_precision,
-        storage_options=storage_options,
-        dtype_backend=dtype_backend
-    )
+    df: pd.DataFrame = pd.read_csv(filepath_or_buffer, **args)
 
     # Convert molecule columns if we have data
     if len(df) > 0:
         if molecule_columns == "detect":
-            df.detect_molecule_columns()
+            df.detect_molecule_columns()  # noqa
         else:
-            df.as_molecule(molecule_columns, inplace=True)
+            df.as_molecule(molecule_columns, inplace=True)  # noqa
 
     # Process 'add_smiles' by first standardizing it to a dictionary
     if add_smiles is not None:
@@ -618,7 +594,7 @@ def read_smi(
     :return: DataFrame with molecules
     """
     if not isinstance(filepath_or_buffer, (Path, str)):
-        raise NotImplemented("Only reading from molecule paths is implemented")
+        raise NotImplementedError("Only reading from molecule paths is implemented")
 
     data = []
 
@@ -661,7 +637,7 @@ def read_smi(
 
     # Convert only if the dataframe is not empty
     if len(df) > 0:
-        df.as_molecule(molecule_column_name, inplace=True)
+        df.as_molecule(molecule_column_name, inplace=True)  # noqa
 
     return df
 
@@ -850,7 +826,7 @@ def read_oedb(
                 val = record.get_value(field)
 
                 if pd.isna(val):
-                    data.add(name, np.NaN, idx, force_type=float)
+                    data.add(name, np.nan, idx, force_type=float)
                 else:
                     data.add(name, val, idx, force_type=float)
 
@@ -865,7 +841,7 @@ def read_oedb(
 
                     # If our NaN value is None, then we'll convert this type float
                     if pd.isna(int_na):
-                        data.add(name, np.NaN, idx, force_type=float)
+                        data.add(name, np.nan, idx, force_type=float)
 
                     elif is_float(int_na):
                         data.add(name, int_na, idx, force_type=float)
@@ -921,10 +897,6 @@ def read_oedb(
 
 @register_dataframe_accessor("as_molecule")
 class DataFrameAsMoleculeAccessor:
-    """
-    Accessor that adds the as_molecule method to a Pandas DataFrame
-    """
-
     def __init__(self, pandas_obj):
         self._obj = pandas_obj
 
@@ -932,27 +904,38 @@ class DataFrameAsMoleculeAccessor:
             self,
             columns: str | Iterable[str],
             *,
-            molecule_format: dict[str, str] | dict[str, int] | str | int | None = None,
+            molecule_format: str | int | None = None,
             inplace=False
     ) -> pd.DataFrame:
-        # Default format is SMILES if none is specified
         molecule_format = molecule_format or oechem.OEFormat_SMI
 
-        # Make sure we're working with a list of columns
+        # noinspection DuplicatedCode
         columns = [columns] if isinstance(columns, str) else list(columns)
 
-        # Validate column names
         for name in columns:
             if name not in self._obj.columns:
                 raise KeyError(f'Column {name} not found in DataFrame: {", ".join(self._obj.columns)}')
 
-        # Whether we are working inplace or on a copy
-        df = self._obj if inplace else self._obj.copy()
+        # Only convert columns that aren't already MoleculeDtype
+        to_convert = [col for col in columns if not isinstance(self._obj[col].dtype, MoleculeDtype)]
 
-        # Convert the columns using the as_molecule series accessor
+        if not inplace:
+            df = self._obj
+            if to_convert:
+                df = self._obj.copy()
+        else:
+            df = self._obj
+
         for col in columns:
-
-            df[col] = df[col].as_molecule(molecule_format=molecule_format or oechem.OEFormat_SMI)
+            if not isinstance(df[col].dtype, MoleculeDtype):
+                df[col] = pd.Series(
+                    _series_to_molecule_array(
+                        df[col],
+                        molecule_format=molecule_format
+                    ),
+                    index=df.index,
+                    dtype=MoleculeDtype()
+                )
 
         return df
 
@@ -971,25 +954,26 @@ class FilterInvalidMoleculesAccessor:
             *,
             inplace=False
     ):
-
-        # Make sure we're working with a list of columns
-        columns = [columns] if isinstance(columns, str) else list(columns)
-
-        # Validate column names
-        for name in columns:
+        cols = [columns] if isinstance(columns, str) else list(columns)
+        for name in cols:
             if name not in self._obj.columns:
-                raise KeyError(f'Column {name} not found in DataFrame: {", ".join(self._obj.columns)}')
+                raise KeyError(f'Column {name} not found in DataFrame')
 
-        # Compute a bitmask of rows that we want to keep over all the columns
-        mask = np.array([True] * len(self._obj))
-        for col in columns:
-            mask &= self._obj[col].array.valid()
+        # Build mask: start with all True
+        mask = np.ones(len(self._obj), dtype=bool)
+        for col in cols:
+            if isinstance(self._obj[col].dtype, MoleculeDtype):
+                mask &= self._obj[col].array.valid()
 
         if inplace:
             self._obj.drop(self._obj[~mask].index, inplace=True)
             return self._obj
 
-        return self._obj.drop(self._obj[~mask].index)
+        if mask.all():
+            return self._obj
+
+        df = self._obj.copy()
+        return df.drop(df[~mask].index)
 
 
 @register_dataframe_accessor("detect_molecule_columns")
@@ -1006,17 +990,13 @@ class DataFrameDetectMoleculeColumnsAccessor:
         molecule_columns = []
 
         for col in self._obj.columns:
-
-            # Skip columns that are already molecule columns
             if self._obj[col].dtype != MoleculeDtype():
-
                 t = predominant_type(self._obj[col], sample_size=sample_size)
-
                 if t is not None and issubclass(t, oechem.OEMolBase):
                     molecule_columns.append(col)
 
-        # Convert to molecule columns
-        self._obj.as_molecule(molecule_columns, inplace=True)
+        if molecule_columns:
+            self._obj.as_molecule(molecule_columns, inplace=True)  # noqa
 
 
 @register_dataframe_accessor("to_sdf")
@@ -1272,10 +1252,10 @@ class WriteToMoleculeCSVAccessor:
         :param decimal: Character recognized as decimal separator. E.g., use ‘,’ for European data.
         :param index_label: Column label to use for the index
         """
-        # Convert all the molecule columns
+        # Convert all the molecule columns to string arrays
         for col in self._obj.columns:
             if isinstance(self._obj.dtypes[col], MoleculeDtype):
-                self._obj[col] = self._obj[col].array.to_molecule_strings(
+                self._obj[col] = self._obj[col].to_molecule_strings(
                     molecule_format=molecule_format,
                     flavor=flavor,
                     gzip=gzip,
@@ -1526,11 +1506,10 @@ class SeriesAsMoleculeAccessor:
         :param molecule_format: File format of column to convert to molecules (extension or from oechem.OEFormat)
         :return: Series as molecule
         """
-        # Column OEFormat
-        _fmt = get_oeformat(oechem.OEFormat_SMI) if molecule_format is None else get_oeformat(molecule_format)
+        if isinstance(self._obj.dtype, MoleculeDtype):
+            return self._obj
 
-        # noinspection PyProtectedMember
-        arr = MoleculeArray._from_sequence(self._obj, molecule_format=_fmt.oeformat)
+        arr = _series_to_molecule_array(self._obj)
         return pd.Series(arr, index=self._obj.index, dtype=MoleculeDtype())
 
 
@@ -1637,26 +1616,13 @@ class SeriesToMoleculeStringsAccessor:
 @register_series_accessor("to_smiles")
 class SeriesToSmilesAccessor:
     def __init__(self, pandas_obj: pd.Series):
-        if not isinstance(pandas_obj.dtype, MoleculeDtype):
-            raise TypeError(
-                "to_smiles only works on molecule columns (oepandas.MoleculeDtype). If this column has "
-                "molecules, use pd.Series.as_molecule to convert to a molecule column first."
-            )
-
         self._obj = pandas_obj
 
-    def __call__(
-            self,
-            *,
-            flavor: int = oechem.OESMILESFlag_ISOMERIC,
-    ) -> pd.Series:
-        """
-        Convert a series to SMILES
-        :param flavor: Flavor for generating SMILES (bitmask from oechem.OESMILESFlag)
-        :return: Series of molecules as SMILES
-        """
-        # noinspection PyUnresolvedReferences
-        arr = self._obj.array.to_smiles(flavor)
+    def __call__(self, *, flavor: int = oechem.OESMILESFlag_ISOMERIC) -> pd.Series:
+        if not isinstance(self._obj.dtype, MoleculeDtype):
+            raise TypeError("to_smiles only works on molecule columns")
+
+        arr = self._obj.array.to_smiles(flavor=flavor)  # noqa
         return pd.Series(arr, index=self._obj.index, dtype=object)
 
 
@@ -1754,6 +1720,7 @@ class DataFrameAsDesignUnitAccessor:
             inplace=False
     ):
         # Make sure we're working with a list of columns
+        # noinspection DuplicatedCode
         columns = [columns] if isinstance(columns, str) else list(columns)
 
         # Validate column names
@@ -1761,16 +1728,23 @@ class DataFrameAsDesignUnitAccessor:
             if name not in self._obj.columns:
                 raise KeyError(f'Column {name} not found in DataFrame: {", ".join(self._obj.columns)}')
 
-        # Whether we are working inplace or on a copy
-        df = self._obj if inplace else self._obj.copy()
+        to_convert = [col for col in columns if not isinstance(self._obj[col].dtype, DesignUnitDtype)]
 
-        # Convert the columns using the as_molecule series accessor
+        if not inplace:
+            df = self._obj
+            if to_convert:
+                df = self._obj.copy()
+        else:
+            df = self._obj
+
         for col in columns:
-
-            df[col] = df[col].as_design_unit()
-
+            if not isinstance(df[col].dtype, DesignUnitDtype):
+                df[col] = pd.Series(
+                    df[col].array if hasattr(df[col], "array") else df[col],
+                    index=df.index,
+                    dtype=DesignUnitDtype(),
+                )
         return df
-
 
 ########################################################################################################################
 # Design Unit Array: Series Extensions

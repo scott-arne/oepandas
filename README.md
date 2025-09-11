@@ -1,200 +1,236 @@
 # OEPandas
 
-**Author:** Scott Arne Johnson ([scott.johnson@bms.com](mailto:scott.johnson@bms.com))
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![OpenEye Toolkits](https://img.shields.io/badge/OpenEye-2023.1.0+-green.svg)](https://www.eyesopen.com/toolkits)
+[![Pandas 2.1+](https://img.shields.io/badge/pandas-2.1+-orange.svg)](https://pandas.pydata.org/)
 
-## Description
+**Deep integration of OpenEye objects into Pandas DataFrames with native support for molecules and design units.**
 
-Deep integration of OpenEye objects into Pandas. This introduces the ```MoleculeArray``` type for holding molecules in
-NumPy arrays, and ```MoleculeArrayDtype``` for typing Pandas series.
+---
 
-# Usage
+## 🚀 Quick Start
 
-Simply adding ```import oepandas``` at the top of your file registers a number of [Pandas extensions](https://pandas.pydata.org/docs/development/extending.html) that 
-support molecule handling. You can also use a number of useful methods directly from OEPandas itself.
-
-## Getting Started with Molecules
-
-First let's experiment with three files in the test directory that all contain the same data. We'll start with the
-CSV file, which contains the following data for 5 molecules:
-
-```text
-SMILES,TITLE,MolWt,NumAcceptors,NumDonors
-CC(=O)Oc1ccccc1C(=O)O,Aspirin,180.15742000000003,2,1
-CC(C)Cc1ccc(cc1)C(C)C(=O)O,Ibuprofen,206.28082,1,1
-...
+```bash
+pip install oepandas
 ```
-
-Because a CSV can contain any arbitrary data, we need to tell OEPandas which columns contain molecules:
-
-```python
-import oepandas as oepd
-
-# Read the CSV version of the data
-df = oepd.read_molecule_csv("tests/assets/5.csv", molecule_columns="SMILES")
-
-df.head()
-```
-
-This will output the following (and if you are using [cnotebook](https://scsgit.rdcloud.bms.com/CADD/cnotebook) in a
-Jupyter Notebook, you'll see a pretty formatted table with molecule depictions):
-
-```text
-                                              SMILES          TITLE  \
-0  <oechem.OEGraphMol; proxy of <Swig Object of t...        Aspirin   
-1  <oechem.OEGraphMol; proxy of <Swig Object of t...      Ibuprofen   
-2  <oechem.OEGraphMol; proxy of <Swig Object of t...  Acetaminophen   
-3  <oechem.OEGraphMol; proxy of <Swig Object of t...       Caffeine   
-4  <oechem.OEGraphMol; proxy of <Swig Object of t...       Diazepam   
-
-       MolWt  NumAcceptors  NumDonors  
-0  180.15742             2          1  
-1  206.28082             1          1  
-2  151.16256             1          2  
-3  194.19060             3          0  
-4  284.74022             2          0  
-```
-
-Let's open the exact same data in SD format:
-
-```python
-import oepandas as oepd
-
-# Read the SDF version of the data
-df = oepd.read_sdf("tests/assets/5.sdf")
-
-df.head()
-```
-
-Take a gander:
-
-```text
-                                            Molecule          TITLE  \
-0  <oechem.OEGraphMol; proxy of <Swig Object of t...        Aspirin   
-1  <oechem.OEGraphMol; proxy of <Swig Object of t...      Ibuprofen   
-2  <oechem.OEGraphMol; proxy of <Swig Object of t...  Acetaminophen   
-3  <oechem.OEGraphMol; proxy of <Swig Object of t...       Caffeine   
-4  <oechem.OEGraphMol; proxy of <Swig Object of t...       Diazepam   
-
-       MolWt  NumAcceptors  NumDonors  
-0  180.15742             2          1  
-1  206.28082             1          1  
-2  151.16256             1          2  
-3  194.19060             3          0  
-4  284.74022             2          0  
-```
-
-Everything looks exactly the same as above with one exception. Instead of a SMILES column, we now have a Molecule
-column. This is because the CSV had a column explicitly called SMILES that we converted to molecules, whereas the
-SD file just has a bunch of molecules in it. We can control the name of the molecule (and title) columns with
-```molecule_column_name``` (and ```title_column_name```) in ```read_sdf```.
-
-One gotcha with SD data: they are always text! Schrodinger gets around this by having a 
-[special naming convention for tags](https://www.schrodinger.com/sites/default/files/s3/public/python_api/2023-3/core_concepts.html#properties)
-but that's not yet supported in the package (and would not work with the above tags).
-
-If you want to specify the columns to make numeric:
-
-```python
-import oepandas as oepd
-
-# Read the SDF version of the data
-df = oepd.read_sdf("tests/assets/5.sdf", numeric=["MolWt", "NumAcceptors", "NumDonors"])
-
-df.head()
-```
-
-This uses logic within Pandas to figure out the right type for each column listed, note that it correctly differentiated
-between the floating point MolWt column and integral NumAcceptors and NumDonors columns.
-
-```text
-Molecule        molecule
-Title             object
-MolWt            float64
-NumAcceptors       int64
-NumDonors          int64
-dtype: object
-```
-
-You can also read OEB files. Note that if data is stored using [OpenEye Generic data](https://docs.eyesopen.com/toolkits/python/oechemtk/genericdata.html),
-the type is automatically determined. If your molecules have SD data, they'll all come in as text.
-
-```text
-import oepandas as oepd
-
-# Read the SDF version of the data
-df = oepd.read_oeb("tests/assets/5.oeb.gz")
-
-df.head()
-```
-
-The data and data types are identical to above.
-
-## It's just Pandas
-
-The nice thing is that once the molecules are in the DataFrame, it's all just Pandas. If I wanted to add a column
-that counts the number of oxygen atoms in each molecule using standard OpenEye logic:
 
 ```python
 import oepandas as oepd
 from openeye import oechem
 
-# Read the data
-df = oepd.read_oeb("tests/assets/5.oeb.gz")
+# Load molecule data from various formats
+df = oepd.read_sdf("molecules.sdf")
+df = oepd.read_oeb("molecules.oeb.gz")  
+df = oepd.read_molecule_csv("data.csv", molecule_columns="SMILES")
 
-# Use standard OpenEye logic to count the number of oxygens in each molecule
-df["OxygenCount"] = df.Molecule.apply(lambda mol: oechem.OECount(mol, oechem.OEIsOxygen()))
-
-df.head()
+# Use pandas normally with molecules
+df["num_oxygens"] = df.Molecule.apply(lambda mol: oechem.OECount(mol, oechem.OEIsOxygen()))
 ```
 
-We get the following:
+## ✨ Features
 
-```text
-   ...         Title      MolWt  NumAcceptors  NumDonors  OxygenCount
-0  ...       Aspirin  180.15742             2          1            4
-1  ...     Ibuprofen  206.28082             1          1            2
-2  ... Acetaminophen  151.16256             1          2            2
-3  ...      Caffeine  194.19060             3          0            2
-4  ...      Diazepam  284.74022             2          0            1
+- **Native OpenEye Integration**: Store `OEGraphMol` and `OEDesignUnit` objects directly in pandas DataFrames
+- **Multiple File Formats**: Read SDF, OEB, CSV, SMI, OEDB, and OEDU files seamlessly
+- **Pandas Extensions**: Rich accessor methods for molecular operations (`.to_smiles()`, `.depict()`, `.get_mols()`, etc.)
+- **Type Safety**: Full type hints and PyCharm IDE support
+- **Performance**: Optimized for large molecular datasets
+
+---
+
+## 📖 Table of Contents
+
+- [Installation](#installation)
+- [Basic Usage](#basic-usage)
+  - [Reading Molecular Data](#reading-molecular-data)
+  - [Working with Molecules](#working-with-molecules)
+  - [Design Units](#design-units)
+- [Advanced Features](#advanced-features)
+  - [Custom Accessors](#custom-accessors)
+- [API Reference](#api-reference)
+- [Development](#development)
+
+---
+
+## 🔧 Installation
+
+### Requirements
+- Python 3.10+
+- pandas 2.1.0+
+- numpy
+- OpenEye Toolkits 2023.1.0+
+- more-itertools
+
+### Install from PyPI
+```bash
+pip install oepandas
 ```
 
-## Getting Started with Design Units
+### Development Installation
+```bash
+git clone <repository-url>
+cd oepandas
+pip install -e ".[dev]"
+```
 
-You can also read design unit files the exact same way. You can see below how we can get the ligand and protein
-molecules from the design unit and use them in a few simple calculations.
+---
+
+## 📚 Basic Usage
+
+### Reading Molecular Data
+
+OEPandas provides readers for all major chemical file formats supported by the OpenEye Toolkits, including their
+proprietary formats and record files:
 
 ```python
 import oepandas as oepd
+
+# SDF files - molecules with properties
+df = oepd.read_sdf("molecules.sdf")
+print(df.head())
+#                                   Molecule    Title      MolWt
+# 0  <oechem.OEGraphMol; proxy...>   Aspirin   180.157
+# 1  <oechem.OEGraphMol; proxy...> Ibuprofen   206.281
+
+# CSV files with SMILES
+df = oepd.read_molecule_csv("data.csv", molecule_columns="SMILES")
+
+# OEB files (binary format)
+df = oepd.read_oeb("molecules.oeb.gz")
+
+# Design unit files
+df = oepd.read_oedu("complexes.oedu")
+
+# OERecord databases
+df = oepd.read_oedb("records.oedb")
+```
+
+### Working with Molecules
+
+Once loaded, use pandas normally with rich molecular extensions:
+
+```python
 from openeye import oechem
 
-# Read the data
-df = oepd.read_oedu("tests/assets/2.oedu")
+# Standard pandas operations work
+filtered_df = df[df.MolWt > 200]
 
-# Use standard OpenEye logic to count the number of oxygens in each molecule
+# Rich molecular accessors
+smiles = df.Molecule.to_smiles()
+images = df.Molecule.depict(width=300, height=200)
+
+# Apply OpenEye functions
+df["oxygen_count"] = df.Molecule.apply(lambda mol: oechem.OECount(mol, oechem.OEIsOxygen()))
+df["has_ring"] = df.Molecule.apply(lambda mol: oechem.OEDetermineRingMembership(mol) > 0)
+
+# Convert to different formats
+df["canonical_smiles"] = df.Molecule.to_smiles(flavor=oechem.OESMILESFlag_Canonical)
+```
+
+### Design Units
+
+Work with protein-ligand complexes:
+
+```python
+# Read design unit file
+df = oepd.read_oedu("protein_ligand_complexes.oedu")
+
+# Extract components
 df["Ligand"] = df.Design_Unit.get_ligands()
-df["Ligand_SMILES"] = df.Ligand.apply(oechem.OEMolToSmiles)
 df["Protein"] = df.Design_Unit.get_proteins()
-df["Num_CAlphas"] = df.Protein.apply(lambda mol: oechem.OECount(mol, oechem.OEIsCAlpha()))
 
-df.head()
+# Analyze components
+df["ligand_mw"] = df.Ligand.apply(oechem.OECalculateMolecularWeight)
+df["protein_residues"] = df.Protein.apply(lambda mol: oechem.OECount(mol, oechem.OEIsResidue()))
 ```
 
-You'll see the following:
+---
 
-```text
-                 Design_Unit                   Title              Ligand            Protein  Num_CAlphas   Ligand_SMILES
-0  <oechem.OEDesignUnit; ...   1JFF(AB) > TA1(B-601)  <oechem.OEMol; ...  <oechem.OEMol; ...         837  CC1[C@H](C[...
-1  <oechem.OEDesignUnit; ...  1TVK(AB) >  EP(B-1001)  <oechem.OEMol; ...  <oechem.OEMol; ...         836  Cc1nc(cs1)/...
+## 🔥 Advanced Features
+
+
+### Custom Accessors
+
+OEPandas registers many useful pandas accessors automatically:
+
+```python
+# Molecular property accessors
+df.Molecule.copy_molecules()          # Deep copy molecules
+df.Molecule.to_smiles()              # Generate SMILES strings
+df.Molecule.depict()                 # Generate 2D depictions
+df.Molecule.as_molecule()            # Convert to different formats
+
+# Design unit accessors  
+df.Design_Unit.get_ligands()         # Extract ligand molecules
+df.Design_Unit.get_proteins()        # Extract protein molecules
+df.Design_Unit.copy_design_units()   # Deep copy design units
+
+# DataFrame-level accessors
+df.oechem.write_sdf("output.sdf")    # Write to SDF file
+df.oechem.write_oeb("output.oeb")    # Write to OEB file
 ```
 
+---
 
-# Development
+## 📋 API Reference
 
-This package makes use of [Pandas extensions](https://pandas.pydata.org/docs/development/extending.html) to make working
-with OpenEye datatypes easier. Nothing needs to be done other than importing the package. However, feel free to use some
-of the utility functions for your own code -- it can be useful beyond Pandas!
+### File Readers
+- `read_sdf(filename, **kwargs)` - Read SDF files
+- `read_oeb(filename, **kwargs)` - Read OEB files  
+- `read_oedu(filename, **kwargs)` - Read OEDU files
+- `read_molecule_csv(filename, molecule_columns, **kwargs)` - Read CSV with molecules
+- `read_smi(filename, **kwargs)` - Read SMILES files
+- `read_oedb(filename, **kwargs)` - Read OEDB files
 
-# Compatibility Notes
+### Core Classes  
+- `MoleculeArray` / `MoleculeDtype` - Pandas extension for molecules
+- `DesignUnitArray` / `DesignUnitDtype` - Pandas extension for design units
+- `DisplayArray` / `DisplayDtype` - Pandas extension for molecular displays
 
-At the moment the requirements are pretty strict on Pandas and the OpenEye Toolkits. This is simply because the
-package hasn't been tested for backwards compatibility on previous versions.
+---
+
+
+## 🛠 Development
+
+### Running Tests
+```bash
+invoke test
+# or
+pytest
+```
+
+### Building Package
+```bash
+invoke build
+# or  
+python -m build
+```
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+---
+
+## 📄 License
+
+This project is licensed under a proprietary license. See the LICENSE file for details.
+
+---
+
+## 👤 Author
+
+**Scott Arne Johnson**
+- Email: [scott.arne.johnson@gmail.com](mailto:scott.arne.johnson@gmail.com)
+
+---
+
+## 🔗 Related Projects
+
+- [OpenEye Toolkits](https://www.eyesopen.com/toolkits) - The underlying cheminformatics toolkit
+- [Pandas](https://pandas.pydata.org/) - Data analysis library that OEPandas extends
+
+---
+
+*Made with ❤️ for the computational chemistry community*

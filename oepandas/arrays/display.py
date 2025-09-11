@@ -83,6 +83,27 @@ class DisplayArray(OEExtensionArray[oedepict.OE2DMolDisplay]):
 
         return cls(displays, copy=copy)
 
+    def deepcopy(self, metadata: bool | dict | None = True):
+        """
+        Make a deep copy of this object using OE2DMolDisplay copy constructor
+        :param metadata: Metadata for copied object (if dict), or whether to copy the metadata, or None (same as False)
+        :return: Deep copy of object
+        """
+        from copy import copy as shallow_copy
+        
+        if isinstance(metadata, bool) and metadata:
+            metadata = shallow_copy(self.metadata)
+
+        # Use DisplayArray's special copy constructor approach for deep copying
+        new_obj = self.__class__(
+            [oedepict.OE2DMolDisplay(obj) if isinstance(obj, self._base_openeye_type) else obj
+             for obj in self._objs],
+             copy=False,  # We've already done the copying above
+             metadata=metadata
+        )
+
+        return new_obj
+
 
 @register_extension_dtype
 class DisplayDtype(PandasExtensionDtype):
@@ -95,12 +116,37 @@ class DisplayDtype(PandasExtensionDtype):
     kind: str = "O"
     base = np.dtype("O")
 
+    @property
+    def na_value(self):
+        """Return the missing value for this dtype"""
+        return None
+
     @classmethod
     def construct_array_type(cls):
         """
         Return array type associated with this dtype
         """
         return DisplayArray
+
+    @classmethod
+    def construct_from_string(cls, string: str):
+        """
+        Construct dtype from string representation
+        """
+        if string == cls.name:
+            return cls()
+        raise TypeError(f"Cannot construct a '{cls}' from '{string}'")
+
+    @classmethod  
+    def _is_dtype(cls, dtype) -> bool:
+        """
+        Check if dtype is an instance of this dtype
+        """
+        if isinstance(dtype, cls):
+            return True
+        if isinstance(dtype, str):
+            return dtype == cls.name
+        return False
 
     # Required
     def __hash__(self) -> int:

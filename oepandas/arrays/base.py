@@ -2,7 +2,6 @@ import sys
 import logging
 import numpy as np
 import pandas as pd
-from more_itertools import flatten
 from copy import copy as shallow_copy
 from openeye import oechem, oedepict
 from abc import ABCMeta
@@ -15,6 +14,8 @@ from pandas._typing import Shape, TakeIndexer, ArrayLike, FillnaOptions
 
 log = logging.getLogger("oepandas")
 
+# Sentinel for no fill value given
+NotSet = object()
 
 ########################################################################################################################
 # Base ExtensionArray definition for OpenEye objects
@@ -40,20 +41,20 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         :param copy: Whether to copy the objects to this extension array
         """
         self._objs = []
-        self.metadata = metadata or {}
+        self.metadata = metadata if isinstance(metadata, dict) else {}
 
         for obj in objs:
 
-            if isinstance(obj, self._base_openeye_type):
-                self._objs.append(obj.CreateCopy() if copy else obj)
-
-            elif pd.isna(obj):
+            if pd.isna(obj):
                 self._objs.append(None)
+
+            elif isinstance(obj, self._base_openeye_type):
+                self._objs.append(obj.CreateCopy() if copy else obj)  # noqa
 
             else:
                 raise TypeError(
-                    "Cannot create {} containing object of type {}. All elements must derive from {}.".format(
-                        type(self).__name__, type(obj).__name__, self._base_openeye_type.__name__
+                    "Cannot create {} containing object of type {} at index {}. All elements must derive from {} or be None/NaN.".format(
+                        type(self).__name__, type(obj).__name__, len(self._objs), self._base_openeye_type.__name__
                     )
                 )
 
@@ -128,30 +129,32 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         if limit is not None:
             limit = max(0, limit)
 
-        # Data to fill
-        if copy:
-            data = np.array(
-                [(obj.CreateCopy() if isinstance(obj, self._base_openeye_type) else obj) for obj in self._objs]
-            )
-        else:
-            data = self._objs
-
         # Filled data
         filled = []
+        fills_done = 0
 
-        for i, obj in enumerate(data):
-            # Termination condition with limit
-            if limit is not None and i >= limit:
-                filled.extend(data[i:])
-                break
+        for obj in self._objs:
 
-            # NaN evaluation
+            if limit is not None and fills_done >= limit:
+
+                filled.append(
+                    obj if not copy else (obj.CreateCopy() if isinstance(obj, self._base_openeye_type) else obj))
+
+                continue
+
             if pd.isna(obj):
                 filled.append(value)
+                fills_done += 1
+
             elif isinstance(obj, self._base_openeye_type):
-                filled.append((obj.CreateCopy() if copy else obj) if obj.IsValid() else value)
+                if not obj.IsValid():
+                    filled.append(value)
+                    fills_done += 1
+
+                else:
+                    filled.append(obj.CreateCopy() if copy else obj)
             else:
-                raise TypeError(f'MoleculeArray cannot determine of object of type {type(obj).__name__} is NaN')
+                raise TypeError(f'{type(self).__name__} cannot determine if object of type {type(obj).__name__} is NaN. Only {self._base_openeye_type.__name__} or None values are supported.')
 
         return self.__class__(filled, metadata=shallow_copy(self.metadata))
 
@@ -168,7 +171,7 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
                     if obj.IsValid():
                         non_missing.append(obj)
                 else:
-                    raise TypeError(f'MoleculeArray cannot determine of object of type {type(obj).__name__} is NaN')
+                    raise TypeError(f'{type(self).__name__} cannot determine if object of type {type(obj).__name__} is NaN. Only {self._base_openeye_type.__name__} or None values are supported.')
 
         return self.__class__(non_missing, metadata=shallow_copy(self.metadata))
 
@@ -177,7 +180,7 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         indices: TakeIndexer,
         *,
         allow_fill: bool = False,
-        fill_value: Any = None,
+        fill_value: Any = NotSet,
     ) -> 'OEExtensionArray[T]':
         """
         Take elements from the array
@@ -186,11 +189,12 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         :param fill_value:
         :return:
         """
-        if allow_fill and fill_value is None:
+        if allow_fill and fill_value is NotSet:
             fill_value = self.dtype.na_value
 
-        result = pandas_take(np.array(self._objs), indices, allow_fill=allow_fill, fill_value=fill_value)
-        return self.__class__(result)
+        raw = self._objs if isinstance(self._objs, np.ndarray) else np.array(self._objs, dtype=object)
+        result = pandas_take(raw, indices, allow_fill=allow_fill, fill_value=fill_value)
+        return self.__class__(result, metadata=shallow_copy(self.metadata))
 
     def tolist(self, copy=False) -> list[oechem.OEMolBase]:
         """
@@ -217,15 +221,21 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         :param to_concat: Objects to concatenate
         :return: Concatenated object
         """
-        return cls(flatten([obj._objs for obj in to_concat]))
+        return cls([item for arr in to_concat for item in arr._objs])
 
     @classmethod
     def _from_factorized(cls, values, original):
-        """
-        NOT IMPLEMENTED: Reconstruct an MoleculeArray after factorization
-        """
-        raise NotImplemented(f'Factorization not implemented for {cls.__name__}')
+        objs = []
+        for idx in values:
 
+            if idx == -1:
+                objs.append(None)
+            else:
+                objs.append(original._objs[idx])  # noqa
+
+        return cls(objs, metadata=shallow_copy(original.metadata))
+
+    # noinspection PyMethodMayBeStatic,PyUnusedLocal
     def _formatter(self, boxed: bool = False) -> Callable[[Any], str | None]:
         """
         Formatter to used
@@ -246,14 +256,25 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         Return a boolean array of whether molecules are valid or invalid
         :return: Boolean array
         """
-        return np.array([obj.IsValid() for obj in self._objs], dtype=bool)
+        results = []
+        for obj in self._objs:
+            if obj is None:
+                results.append(False)
+            elif isinstance(obj, self._base_openeye_type):
+                # noinspection PyBroadException
+                try:
+                    results.append(bool(obj.IsValid()))
+                except Exception:
+                    results.append(False)
+            else:
+                raise TypeError(f'Unexpected object type {type(obj).__name__} found in {type(self).__name__} at position {len(results)}. Expected {self._base_openeye_type.__name__} or None.')
+        return np.array(results, dtype=bool)
 
     # noinspection PyDefaultArgument
-    def __deepcopy__(self, memodict={}):
+    def __deepcopy__(self, memodict=None):
         return self.deepcopy(metadata=True)
 
     def __copy__(self):
-        print("COPY!")
         return self.copy(metadata=True)
 
     @property
@@ -287,11 +308,18 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         else:
             raise TypeError(f'Cannot compare equality of {type(self).__name__} and {type(other).__name__}')
 
-    def __ne__(self, other) -> bool:
+    def __ne__(self, other):
         if isinstance(other, OEExtensionArray):
-            return np.array(self._objs) != np.array(other._objs)
+            if len(self) != len(other):
+                return np.zeros(len(self), dtype=bool)
+            return np.frompyfunc(lambda a, b: a is b, 2, 1)(self._objs, other._objs).astype(bool)
+
         elif isinstance(other, Iterable):
-            return np.array(self._objs) != np.array(other)
+            other_list = list(other)
+            if len(self) != len(other_list):
+                return np.zeros(len(self), dtype=bool)
+            return np.frompyfunc(lambda a, b: a is b, 2, 1)(self._objs, other_list).astype(bool)
+
         else:
             raise TypeError(f'Cannot compare non-equality of {type(self).__name__} and {type(other).__name__}')
 
@@ -326,12 +354,9 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         raise NotImplemented(f'Subtraction not implemented for {type(self).__name__}')
 
     def __contains__(self, item: object) -> bool:
-        # Handle None/NaN
         if pd.isna(item):
-            return any(map(lambda obj: obj is None, self._objs))
-        else:
-            # Delegate to list of objects
-            return item in self._objs
+            return any(obj is None for obj in self._objs)
+        return any(obj is item for obj in self._objs)
 
     def __setitem__(self, index, value) -> None:
         """
@@ -342,7 +367,11 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         :type value: oechem.OEMolBase
         :return:
         """
-        self._objs[index] = value
+        # Handle NaN values consistently with constructor
+        if pd.isna(value):
+            self._objs[index] = None
+        else:
+            self._objs[index] = value
 
     def __getitem__(self, index) -> T | 'OEExtensionArray[T]':
         """
@@ -355,10 +384,23 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         return self.__class__(self._objs[index], metadata=shallow_copy(self.metadata))
 
     def __hash__(self):
-        return hash(self._objs)
+        return hash(tuple(self._objs))
 
     def __reversed__(self):
         return self.__class__(reversed(self._objs), metadata=shallow_copy(self.metadata))
+
+    def __array__(self, dtype=None, copy=None):
+        arr = np.empty(len(self._objs), dtype=object)
+        arr[:] = self._objs
+        if dtype:
+            arr = arr.astype(dtype)
+        if copy is False:
+            return arr
+        elif copy is True:
+            return arr.copy()
+        else:
+            # copy=None means use default behavior (no explicit copy)
+            return arr
 
     def __str__(self):
         return f'{type(self).__name__}(len={len(self._objs)})'

@@ -8,6 +8,7 @@ __pycache__/
 *.py[cod]
 .idea
 *.sublime-*
+.coverage
 
 # C extensions
 *.so
@@ -16,6 +17,7 @@ __pycache__/
 .Python
 venv/
 env/
+htmlcov/
 build/
 develop-eggs/
 dist/

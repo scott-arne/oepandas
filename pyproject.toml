@@ -1,4 +1,4 @@
-# Packaging configuration file for bms_chem
+# Packaging configuration file for oepandas
 # ----------------------------------------------------------------------------------------------------------------------
 #   Guide: https://packaging.python.org/en/latest/guides/writing-pyproject-toml/
 #   Spec:  https://packaging.python.org/en/latest/specifications/pyproject-toml/
@@ -40,7 +40,7 @@ keywords = ["science"]
 
 # Project authors and contact information
 authors = [
-    {name = "Scott Johnson", email = "scott.johnson@bms.com" }
+    {name = "Scott Johnson", email = "scott.johnson.consulting@gmail.com" }
 ]
 
 # Classifiers help users find your project by categorizing it
@@ -59,7 +59,7 @@ classifiers = [
 # Additional groups of dependencies
 # https://packaging.python.org/en/latest/specifications/dependency-specifiers/#extras
 [project.optional-dependencies]
-dev = ["invoke", "build"]
+dev = ["invoke", "build", "pytest"]
 
 # ----------------------------------------------------------------------------------------
 # These configurations are specific to the `setuptools` build backend
@@ -72,6 +72,10 @@ include = ["oepandas*"]
 
 # Exclude any test directory
 exclude = ["*test*"]
+
+[tool.setuptools.package-data]
+# Include type stub files and py.typed marker
+oepandas = ["*.pyi", "py.typed"]
 
 
 [tool.setuptools.dynamic]

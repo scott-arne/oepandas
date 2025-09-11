@@ -2,7 +2,7 @@ import logging
 import numpy as np
 import pandas as pd
 from openeye import oechem
-from typing import Any, Generator, Literal
+from typing import Any, Generator, Literal, Optional
 from collections.abc import Iterable, Sequence
 from pandas.core.dtypes.dtypes import PandasExtensionDtype
 from pandas.api.extensions import register_extension_dtype
@@ -25,11 +25,30 @@ log = logging.getLogger("oepandas")
 # Helpers
 ########################################################################################################################
 
+def _has_data_and_is_not_blank(mol: oechem.OEMolBase, tag: str) -> bool:
+    """
+    Check if a molecue has data (SD or generic) and that it is not blank/None
+    :param mol: Molecule
+    :param tag: Data tag
+    :return: True if the molecule has that data tag and it is not blank/None
+    """
+    # noinspection PyBroadException
+    try:
+        if oechem.OEHasSDData(mol, tag) and oechem.OEGetSDData(mol, tag) not in (None, ""):
+            return True
+
+        if mol.HasData(tag) and mol.GetData(tag) not in (None, ""):
+            return True
+    except Exception:
+        pass
+
+    return False
+
 def _read_molecules(
         fp: FilePath,
         file_format: int | str,
         *,
-        flavor: int | None = None,
+        flavor: Optional[int] = None,
         conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default",
         gzip: bool = False
 ) -> Generator[oechem.OEMolBase, None, None]:
@@ -96,7 +115,7 @@ def _read_molecules(
         ifs.Setgz(fmt.gzip)
 
         for mol in ifs.GetOEMols():
-            yield mol.CreateCopy()
+            yield oechem.OEMol(mol)
 
 
 ########################################################################################################################
@@ -171,7 +190,7 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
             cls,
             scalars: Iterable[Any],
             *,
-            dtype: Dtype | None = None,
+            dtype: Dtype | None = None,  # noqa
             copy: bool = False,
             molecule_format: str | int | None = None,
             gzip: bool = False
@@ -224,8 +243,8 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
             cls,
             strings: Sequence[str],
             *,
-            dtype: Dtype | None = None,
-            copy: bool = False,
+            dtype: Dtype | None = None,  # noqa
+            copy: bool = False,  # noqa
             molecule_format: int | str | None = None,
             b64decode: bool = False) -> 'MoleculeArray':
         """
@@ -316,9 +335,6 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
     # def take(self, indices, allow_fill=False, fill_value=None):
     #     return self.take(indices, allow_fill=allow_fill, fillvalue=fill_value)
 
-    def copy(self):
-        return MoleculeArray(self._objs)
-
     def deepcopy(self, metadata: bool | dict | None = True):
         return MoleculeArray(self._objs, metadata=metadata, deepcopy=True)
 
@@ -330,7 +346,8 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
     def read_smi(
             cls,
             fp: FilePath,
-            flavor: int | None = None
+            flavor: int | None = None,
+            **_
     ) -> 'MoleculeArray':
         """
         Read molecules from an SMILES file and return an array
@@ -446,8 +463,17 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
 
         matches = []
         for mol in self:
-            oechem.OEPrepareSearch(mol, ss, adjustH)
-            matches.append(ss.SingleMatch(mol))
+            if mol is None or not mol.IsValid():
+                matches.append(False)
+
+            # noinspection PyBroadException
+            try:
+                oechem.OEPrepareSearch(mol, ss, adjustH)
+                matches.append(ss.SingleMatch(mol))
+
+            except Exception:
+                matches.append(False)
+
         return np.array(matches, dtype=bool)
 
     # --------------------------------------------------------
@@ -537,14 +563,18 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
         # Default flavor is canonical isomeric SMILES
         flavor = flavor or oechem.OESMILESFlag_ISOMERIC
 
-        smiles = []
-        for mol in self:
+        def _smiles(mol):
             if mol is not None and mol.IsValid():
-                smiles.append(oechem.OECreateSmiString(mol, flavor))
-            else:
-                smiles.append('')
-        return np.array(smiles, dtype=str)
+                return oechem.OECreateSmiString(mol, flavor)
+            return ''
 
+        vectorized = np.frompyfunc(_smiles, 1, 1)(self._objs)
+        return vectorized.astype(str)
+
+    def structural_eq(self, other, flavor=None):
+        s1 = self.to_smiles(flavor=flavor)
+        s2 = other.to_smiles(flavor=flavor)
+        return s1 == s2
 
 @register_extension_dtype
 class MoleculeDtype(PandasExtensionDtype):
@@ -552,8 +582,8 @@ class MoleculeDtype(PandasExtensionDtype):
     OpenEye molecule datatype for Pandas
     """
 
-    type: type = oechem.OEMol
-    name: str = "molecule"
+    type: type = oechem.OEMol  # noqa
+    name: str = "molecule"  # noqa
     kind: str = "O"
     base = np.dtype("O")
 

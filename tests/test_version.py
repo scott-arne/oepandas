@@ -1,11 +1,7 @@
-import unittest
-
-
-class TestVersion(unittest.TestCase):
-    def test_version(self):
-        """
-        Example test
-        """
-        # noinspection PyProtectedMember
-        from oepandas import __version__
-        self.assertIsNotNone(__version__)
+def test_version():
+    """
+    Example test
+    """
+    # noinspection PyProtectedMember
+    from oepandas import __version__
+    assert __version__ is not None
