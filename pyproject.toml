@@ -33,14 +33,14 @@ requires-python = ">=3.10"
 # This is either text indicating the license for the distribution, or a file
 # that contains the license.
 # https://packaging.python.org/en/latest/specifications/core-metadata/#license
- license = {text = "LicenseRef-Proprietary"}
+license = {file = "LICENSE"}
 
 # Search keywords
 keywords = ["science"]
 
 # Project authors and contact information
 authors = [
-    {name = "Scott Johnson", email = "scott.johnson.consulting@gmail.com" }
+    {name = "Scott Arne Johnson", email = "scott.arne.johnson@gmail.com" }
 ]
 
 # Classifiers help users find your project by categorizing it

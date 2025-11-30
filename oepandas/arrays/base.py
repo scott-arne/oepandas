@@ -3,6 +3,7 @@ import logging
 import numpy as np
 import pandas as pd
 from copy import copy as shallow_copy
+from itertools import chain
 from openeye import oechem, oedepict
 from abc import ABCMeta
 from typing import Generic, TypeVar, Any, Callable
@@ -221,18 +222,13 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         :param to_concat: Objects to concatenate
         :return: Concatenated object
         """
-        return cls([item for arr in to_concat for item in arr._objs])
+        # Optimized: Use itertools.chain for better performance with large concatenations
+        return cls(chain.from_iterable(arr._objs for arr in to_concat))
 
     @classmethod
     def _from_factorized(cls, values, original):
-        objs = []
-        for idx in values:
-
-            if idx == -1:
-                objs.append(None)
-            else:
-                objs.append(original._objs[idx])  # noqa
-
+        # Optimized: Use list comprehension for better performance
+        objs = [None if idx == -1 else original._objs[idx] for idx in values]
         return cls(objs, metadata=shallow_copy(original.metadata))
 
     # noinspection PyMethodMayBeStatic,PyUnusedLocal
@@ -249,26 +245,28 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         Return a boolean array of whether elements in the array are None
         :return: Boolean array
         """
-        return np.array([obj is None for obj in self._objs], dtype=bool)
+        # Optimized: Use numpy fromiter for better performance
+        return np.fromiter((obj is None for obj in self._objs), dtype=bool, count=len(self._objs))
 
     def valid(self) -> np.ndarray:
         """
         Return a boolean array of whether molecules are valid or invalid
         :return: Boolean array
         """
-        results = []
-        for obj in self._objs:
+        def _is_valid(obj, idx):
             if obj is None:
-                results.append(False)
+                return False
             elif isinstance(obj, self._base_openeye_type):
                 # noinspection PyBroadException
                 try:
-                    results.append(bool(obj.IsValid()))
+                    return bool(obj.IsValid())
                 except Exception:
-                    results.append(False)
+                    return False
             else:
-                raise TypeError(f'Unexpected object type {type(obj).__name__} found in {type(self).__name__} at position {len(results)}. Expected {self._base_openeye_type.__name__} or None.')
-        return np.array(results, dtype=bool)
+                raise TypeError(f'Unexpected object type {type(obj).__name__} found in {type(self).__name__} at position {idx}. Expected {self._base_openeye_type.__name__} or None.')
+
+        # Optimized: Use numpy fromiter for better performance
+        return np.fromiter((_is_valid(obj, idx) for idx, obj in enumerate(self._objs)), dtype=bool, count=len(self._objs))
 
     # noinspection PyDefaultArgument
     def __deepcopy__(self, memodict=None):

@@ -46,6 +46,7 @@ df["num_oxygens"] = df.Molecule.apply(lambda mol: oechem.OECount(mol, oechem.OEI
   - [Design Units](#design-units)
 - [Advanced Features](#advanced-features)
   - [Custom Accessors](#custom-accessors)
+- [Examples](#examples)
 - [API Reference](#api-reference)
 - [Development](#development)
 
@@ -60,6 +61,9 @@ df["num_oxygens"] = df.Molecule.apply(lambda mol: oechem.OECount(mol, oechem.OEI
 - OpenEye Toolkits 2023.1.0+
 - more-itertools
 
+**Note on OpenEye Toolkits License:**
+OpenEye Toolkits requires a commercial license. However, **free licenses are available for academic and non-profit institutions**. Visit [OpenEye Scientific](https://www.eyesopen.com/academic-licensing) or contact OpenEye directly to request an academic license.
+
 ### Install from PyPI
 ```bash
 pip install oepandas
@@ -67,7 +71,7 @@ pip install oepandas
 
 ### Development Installation
 ```bash
-git clone <repository-url>
+git clone https://github.com/scott-arne/oepandas.git
 cd oepandas
 pip install -e ".[dev]"
 ```
@@ -171,6 +175,15 @@ df.oechem.write_oeb("output.oeb")    # Write to OEB file
 
 ---
 
+## 📘 Examples
+
+Comprehensive Jupyter notebooks are available in the `examples/` directory:
+
+- **01_getting_started.ipynb** - Basic usage, molecular calculations, and data manipulation
+- **02_advanced_features.ipynb** - File I/O, design units, performance optimization, and ML integration
+
+---
+
 ## 📋 API Reference
 
 ### File Readers
@@ -215,7 +228,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 📄 License
 
-This project is licensed under a proprietary license. See the LICENSE file for details.
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
 ---
 
@@ -232,5 +245,3 @@ This project is licensed under a proprietary license. See the LICENSE file for d
 - [Pandas](https://pandas.pydata.org/) - Data analysis library that OEPandas extends
 
 ---
-
-*Made with ❤️ for the computational chemistry community*
