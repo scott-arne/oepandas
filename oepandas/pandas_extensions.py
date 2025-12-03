@@ -2,7 +2,7 @@ import logging
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from openeye import oechem
+from openeye import oechem, oegrid
 from typing import Literal, Protocol
 from collections.abc import Iterable
 from pandas.api.types import is_numeric_dtype, is_float, is_integer
@@ -13,7 +13,7 @@ from pandas._typing import (
     FilePath,
     ReadBuffer,
     ReadCsvBuffer,
-    Dtype,
+    Dtype
 )
 from .util import (
     get_oeformat,
@@ -813,7 +813,7 @@ def read_oedb(
         for field in record.get_fields():  # type: oechem.OEFieldBase
             name = field.get_name()
             # noinspection PyUnresolvedReferences
-            dtype = field.get_type()
+            dtype = field.get_type_name()
 
             # Skip columns we weren't asked to read (if provided)
             if usecols is not None and name not in usecols:
@@ -822,7 +822,7 @@ def read_oedb(
             # ------------------------------
             # Float field
             # ------------------------------
-            if dtype == oechem.Types.Float:
+            if dtype == oechem.Types.Float.get_name():
                 val = record.get_value(field)
 
                 if pd.isna(val):
@@ -833,7 +833,7 @@ def read_oedb(
             # ------------------------------
             # Integer field
             # ------------------------------
-            elif dtype == oechem.Types.Int:
+            elif dtype == oechem.Types.Int.get_name():
                 val = record.get_value(field)
 
                 # Value is NaN - we try to preserve the integer data type, but int_na could mess that up
@@ -859,23 +859,32 @@ def read_oedb(
             # ------------------------------
             # Boolean field
             # ------------------------------
-            elif dtype == oechem.Types.Bool:
+            elif dtype == oechem.Types.Bool.get_name():
                 val = record.get_value(field)
                 data.add(name, val, idx, force_type=bool)
 
             # ------------------------------
             # Molecule field
             # ------------------------------
-            elif dtype == oechem.Types.Chem.Mol:
+            elif dtype == oechem.Types.Chem.Mol.get_name():
                 val = record.get_value(field)
                 data.add(name, val, idx, force_type=MoleculeDtype())
 
             # ------------------------------
             # Design unit field
             # ------------------------------
-            elif dtype == oechem.Types.Chem.DesignUnit:
+            elif dtype == oechem.Types.Chem.DesignUnit.get_name():
                 val = record.get_value(field)
                 data.add(name, val, idx, force_type=DesignUnitDtype())
+
+            # ------------------------------
+            # Grid field
+            # Does not have an OpenEye handler
+            # ------------------------------
+            elif dtype == "Chem.Grid":
+                val = record.get_bytes(field)
+                grid = oechem.OEGetScalarGridFromBytes(val, oegrid.OEGridFileType_GRD)
+                data.add(name, grid, idx, force_type=object)
 
             # ------------------------------
             # Everything else
