@@ -1,8 +1,8 @@
 # OEPandas
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![OpenEye Toolkits](https://img.shields.io/badge/OpenEye-2023.1.0+-green.svg)](https://www.eyesopen.com/toolkits)
-[![Pandas 2.1+](https://img.shields.io/badge/pandas-2.1+-orange.svg)](https://pandas.pydata.org/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![OpenEye Toolkits](https://img.shields.io/badge/OpenEye-2025.2.1+-green.svg)](https://www.eyesopen.com/toolkits)
+[![Pandas 2.2+](https://img.shields.io/badge/pandas-2.2+-orange.svg)](https://pandas.pydata.org/)
 
 **Deep integration of OpenEye objects into Pandas DataFrames with native support for molecules and design units.**
 
