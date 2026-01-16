@@ -2,7 +2,7 @@ import logging
 import numpy as np
 import pandas as pd
 from openeye import oechem
-from typing import Any, Generator, Literal, Optional
+from typing import Any, Generator, Literal, Optional, Self
 from collections.abc import Iterable, Sequence
 from pandas.core.dtypes.dtypes import PandasExtensionDtype
 from pandas.api.extensions import register_extension_dtype
@@ -194,7 +194,7 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
             copy: bool = False,
             molecule_format: str | int | None = None,
             gzip: bool = False
-    ) -> 'MoleculeArray':
+    ) -> Self:
         """
         Iniitialize from a sequence of scalar values
         :param scalars: Scalars
@@ -246,7 +246,7 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
             dtype: Dtype | None = None,  # noqa
             copy: bool = False,  # noqa
             molecule_format: int | str | None = None,
-            b64decode: bool = False) -> 'MoleculeArray':
+            b64decode: bool = False) -> Self:
         """
         Read molecules form a sequence of strings (this is an optimization of _from_sequence, which does more
         type checking)
@@ -283,7 +283,7 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
             copy: bool = False,
             molecule_format: int | str | None = None,
             b64decode: bool = False
-    ) -> 'MoleculeArray':
+    ) -> Self:
         """
         Public alias of _from_sequence_of_strings
         :param strings: Sequence of strings
@@ -310,7 +310,7 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
             copy: bool = False,
             molecule_format: str | int | None = None,
             gzip: bool = False
-    ) -> 'MoleculeArray':
+    ) -> Self:
         """
         Public alias of _from_sequence
         :param scalars: Sequence of objects
@@ -348,7 +348,7 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
             fp: FilePath,
             flavor: int | None = None,
             **_
-    ) -> 'MoleculeArray':
+    ) -> Self:
         """
         Read molecules from an SMILES file and return an array
         :param fp: Path to the SMILES file
@@ -369,7 +369,7 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
             fp: FilePath,
             flavor: int | None = None,
             conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default"
-    ) -> 'MoleculeArray':
+    ) -> Self:
         """
         Read molecules from an SD file and return an array
 
@@ -408,7 +408,7 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
             fp: FilePath,
             flavor: int | None = None,
             conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default"
-    ) -> 'MoleculeArray':
+    ) -> Self:
         """
         Read molecules from an OEB file and return an array
 

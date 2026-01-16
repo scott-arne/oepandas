@@ -238,22 +238,47 @@ class TestOEExtensionArrayBase:
         """Test isna method"""
         molecules_with_none = test_molecules + [None, np.nan]
         arr = MoleculeArray(molecules_with_none)
-        
+
         na_mask = arr.isna()
         assert isinstance(na_mask, np.ndarray)
         assert na_mask.dtype == bool
         assert len(na_mask) == 6
-        
+
         # First 4 should be False (valid molecules)
         assert not na_mask[0]
-        assert not na_mask[1] 
+        assert not na_mask[1]
         assert not na_mask[2]
         assert not na_mask[3]
-        
+
         # Last 2 should be True (None values)
         assert na_mask[4]
         assert na_mask[5]
-    
+
+    def test_molecule_array_valid(self, test_molecules):
+        """Test valid method"""
+        # Create an invalid molecule
+        invalid_mol = oechem.OEMol()  # Empty molecule is invalid
+
+        molecules_mixed = test_molecules + [None, invalid_mol]
+        arr = MoleculeArray(molecules_mixed)
+
+        valid_mask = arr.valid()
+        assert isinstance(valid_mask, np.ndarray)
+        assert valid_mask.dtype == bool
+        assert len(valid_mask) == 6
+
+        # First 4 should be True (valid molecules)
+        assert valid_mask[0]
+        assert valid_mask[1]
+        assert valid_mask[2]
+        assert valid_mask[3]
+
+        # None should be False
+        assert not valid_mask[4]
+
+        # Invalid (empty) molecule should be False
+        assert not valid_mask[5]
+
     def test_molecule_array_take(self, test_molecules):
         """Test take method"""
         arr = MoleculeArray(test_molecules)

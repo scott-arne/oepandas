@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from openeye import oechem
-from typing import Any, Generator
+from typing import Any, Generator, Self
 from collections.abc import Iterable, Sequence
 from pandas.core.dtypes.dtypes import PandasExtensionDtype
 from pandas.api.extensions import register_extension_dtype
@@ -75,7 +75,7 @@ class DesignUnitArray(OEExtensionArray[oechem.OEDesignUnit]):
             *,
             dtype: Dtype | None = None,
             copy: bool = False,
-    ) -> 'DesignUnitArray':
+    ) -> Self:
         """
         Iniitialize from a sequence of scalar values
         :param scalars: Scalars
@@ -121,7 +121,7 @@ class DesignUnitArray(OEExtensionArray[oechem.OEDesignUnit]):
             *,
             dtype: Dtype | None = None,
             copy: bool = False,
-    ) -> 'DesignUnitArray':
+    ) -> Self:
         """
         Read molecules form a sequence of base64-encoded design unit strings
         :param strings: Sequence of strings
@@ -151,7 +151,7 @@ class DesignUnitArray(OEExtensionArray[oechem.OEDesignUnit]):
             cls,
             fp: Path | str,
             astype: type[oechem.OEDesignUnit] = oechem.OEDesignUnit,
-    ) -> 'DesignUnitArray':
+    ) -> Self:
         """
         Read molecules from a design unit file
         :param fp: Path to the SD file

@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from openeye import oechem, oegrid
-from typing import Literal, Protocol
+from typing import Literal, Protocol, TypedDict
 from collections.abc import Iterable
 from pandas.api.types import is_numeric_dtype, is_float, is_integer
 from pandas.core.dtypes.dtypes import PandasExtensionDtype
@@ -28,6 +28,25 @@ from .exception import FileError
 
 
 log = logging.getLogger("oepandas")
+
+
+class MoleculeReaderOptions(TypedDict, total=False):
+    """Options for reading molecules into a DataFrame (PEP 692)."""
+    flavor: int | None
+    molecule_column_name: str
+    title_column_name: str | None
+    add_smiles: None | bool | str | Iterable[str]
+    molecule_columns: None | str | Iterable[str]
+    expand_confs: bool
+    generic_data: bool
+    sd_data: bool
+    usecols: None | str | Iterable[str]
+    numeric_columns: None | str | dict[str, Literal["integer", "signed", "unsigned", "float"] | None] | Iterable[str]
+    conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"]
+    combine_tags: Literal["prefix", "prefer_sd", "prefer_generic"]
+    conf_index_column_name: str
+    sd_prefix: str
+    generic_prefix: str
 
 
 ########################################################################################################################
@@ -295,7 +314,8 @@ def _add_smiles_columns(
         # Nothing valid to do
         return
 
-    # Create SMILES columns
+    # Create SMILES columns, collecting any errors
+    smiles_errors: list[Exception] = []
     for src_col, smiles_col in add_smiles_map.items():
         series = df[src_col]
 
@@ -305,12 +325,15 @@ def _add_smiles_columns(
 
         try:
             smiles = series.array.to_smiles(flavor=oechem.OESMILESFlag_ISOMERIC)  # noqa
+            df[smiles_col] = pd.Series(smiles, index=df.index, dtype=object)
 
         except Exception as e:
+            smiles_errors.append(ValueError(f"Failed to generate SMILES for column {src_col}: {e}"))
             log.debug("Failed to generate SMILES for column %s: %s", src_col, e)
-            continue
 
-        df[smiles_col] = pd.Series(smiles, index=df.index, dtype=object)
+    # Log aggregated errors if any occurred (but don't raise - maintain backward compatibility)
+    if smiles_errors:
+        log.warning("SMILES generation had %d error(s)", len(smiles_errors))
 
 
 # Types

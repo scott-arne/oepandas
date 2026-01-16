@@ -6,7 +6,7 @@ from copy import copy as shallow_copy
 from itertools import chain
 from openeye import oechem, oedepict
 from abc import ABCMeta
-from typing import Generic, TypeVar, Any, Callable
+from typing import Generic, TypeVar, Any, Callable, Self
 from collections.abc import Sized, Iterable, Sequence, Iterator
 from pandas.api.extensions import ExtensionArray
 from pandas.core.algorithms import take as pandas_take
@@ -79,7 +79,7 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         else:
             self._objs.extend(map(lambda x: None if pd.isna(x) else x, items))
 
-    def copy(self, metadata: bool | dict | None = True):
+    def copy(self, metadata: bool | dict | None = True) -> Self:
         """
         Make a shallow copy of this object
         :param metadata: Metadata for copied object (if dict), or whether to copy the metadata, or None (same as False)
@@ -94,7 +94,7 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         )
         return new_obj
 
-    def deepcopy(self, metadata: bool | dict | None = True):
+    def deepcopy(self, metadata: bool | dict | None = True) -> Self:
         """
         Make a deep copy of this object
         :param metadata: Metadata for copied object (if dict), or whether to copy the metadata, or None (same as False)
@@ -182,7 +182,7 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         *,
         allow_fill: bool = False,
         fill_value: Any = NotSet,
-    ) -> 'OEExtensionArray[T]':
+    ) -> Self:
         """
         Take elements from the array
         :param indices:
@@ -216,7 +216,7 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         return None
 
     @classmethod
-    def _concat_same_type(cls, to_concat: Sequence['OEExtensionArray[T]']) -> 'OEExtensionArray[T]':
+    def _concat_same_type(cls, to_concat: Sequence['OEExtensionArray[T]']) -> Self:
         """
         Concatenate objects with the same datatype
         :param to_concat: Objects to concatenate
@@ -253,20 +253,17 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         Return a boolean array of whether molecules are valid or invalid
         :return: Boolean array
         """
-        def _is_valid(obj, idx):
+        def _is_valid(obj):
             if obj is None:
                 return False
-            elif isinstance(obj, self._base_openeye_type):
-                # noinspection PyBroadException
-                try:
-                    return bool(obj.IsValid())
-                except Exception:
-                    return False
-            else:
-                raise TypeError(f'Unexpected object type {type(obj).__name__} found in {type(self).__name__} at position {idx}. Expected {self._base_openeye_type.__name__} or None.')
+            try:
+                return bool(obj.IsValid())
+            except Exception:
+                return False
 
-        # Optimized: Use numpy fromiter for better performance
-        return np.fromiter((_is_valid(obj, idx) for idx, obj in enumerate(self._objs)), dtype=bool, count=len(self._objs))
+        # Vectorized: Use numpy ufunc for better performance on large arrays
+        ufunc_is_valid = np.frompyfunc(_is_valid, 1, 1)
+        return ufunc_is_valid(self._objs).astype(bool)
 
     # noinspection PyDefaultArgument
     def __deepcopy__(self, memodict=None):
@@ -333,7 +330,7 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
     def __ge__(self, other: Sized) -> bool:
         return len(self) >= len(other)
 
-    def __add__(self, other: Iterable[T | None] | T | None | 'OEExtensionArray[T]') -> 'OEExtensionArray[T]':
+    def __add__(self, other: Iterable[T | None] | T | None | 'OEExtensionArray[T]') -> Self:
         """
         Create a shallow copy of this extension array with added element(s)
         :param other: Value(s) to add
@@ -348,7 +345,7 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
 
         return new_obj
 
-    def __sub__(self, other: Iterable[T | None] | T | None | 'OEExtensionArray[T]') -> 'OEExtensionArray[T]':
+    def __sub__(self, other: Iterable[T | None] | T | None | 'OEExtensionArray[T]') -> Self:
         raise NotImplemented(f'Subtraction not implemented for {type(self).__name__}')
 
     def __contains__(self, item: object) -> bool:
@@ -371,7 +368,7 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         else:
             self._objs[index] = value
 
-    def __getitem__(self, index) -> T | 'OEExtensionArray[T]':
+    def __getitem__(self, index) -> T | Self:
         """
         Get an item in the array
         :param index: Item index
@@ -384,7 +381,7 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
     def __hash__(self):
         return hash(tuple(self._objs))
 
-    def __reversed__(self):
+    def __reversed__(self) -> Self:
         return self.__class__(reversed(self._objs), metadata=shallow_copy(self.metadata))
 
     def __array__(self, dtype=None, copy=None):
