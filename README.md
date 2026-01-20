@@ -40,9 +40,8 @@ OEPandas extends Pandas with custom extension arrays that store OpenEye `OEMol` 
 |---------|---------|
 | Python | 3.11+ |
 | pandas | 2.2.0+ |
-| numpy | any |
+| numpy | 2.0.0+ |
 | OpenEye Toolkits | 2025.2.1+ |
-| more-itertools | any |
 
 ### OpenEye Toolkits License
 

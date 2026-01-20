@@ -1,4 +1,4 @@
 pandas>=2.2.0
-numpy
+numpy>=2.0.0
 openeye-toolkits>=2025.2.1
 more-itertools
