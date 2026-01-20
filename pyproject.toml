@@ -88,3 +88,11 @@ version = {attr = "oepandas.__version__"}
 # Package dependencies (these will be installed by pip)
 # https://packaging.python.org/discussions/install-requires-vs-requirements/
 dependencies = {file = ["requirements.txt"]}
+
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    # Suppress SWIG-related deprecation warnings from OpenEye toolkit bindings
+    "ignore:builtin type Swig.*:DeprecationWarning",
+    "ignore:builtin type swig.*:DeprecationWarning",
+]

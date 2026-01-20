@@ -121,7 +121,7 @@ def test_dataframe_to_molecule(alkanes_df):
     Convert a string column to a molecule column
     """
     df = alkanes_df.copy()
-    assert isinstance(df.as_molecule("smiles1").smiles1.dtype, MoleculeDtype)
+    assert isinstance(df.chem.as_molecule("smiles1").smiles1.dtype, MoleculeDtype)
 
     # Test that it worked
     df["HACount"] = df.molecule.apply(lambda mol: oechem.OECount(mol, oechem.OEIsHeavy()))
@@ -153,7 +153,19 @@ def test_accessor_filter_invalid():
         {"Title": x[1].GetTitle(), "MOL": x[1]},
     ])
     df["MOL"] = df.MOL.astype(MoleculeDtype())
-    assert len(df.filter_invalid_molecules("MOL")) == 2
+    assert len(df.chem.filter_valid("MOL")) == 2
+
+def test_series_is_valid():
+    """Test is_valid() series method"""
+    x = MoleculeArray.read_smi(Path(ASSETS, "10.smi"))
+    df = pd.DataFrame([
+        {"Title": x[0].GetTitle(), "MOL": x[0]},
+        {"Title": "Invalid", "MOL": oechem.OEMol()},
+        {"Title": x[1].GetTitle(), "MOL": x[1]},
+    ])
+    df["MOL"] = df.MOL.astype(MoleculeDtype())
+    validity = df.MOL.chem.is_valid()
+    assert validity.tolist() == [True, False, True]
 
 @pytest.mark.skipif(os.environ.get("OEPANDAS_TEST_LONG", "FALSE").upper() != "TRUE", reason="Skipping long tests")
 def test_regression_as_molecule_formatter_axis_error():
@@ -342,7 +354,7 @@ def test_series_to_smiles():
         "CC(C)Cc1ccc(cc1)C(C)C(=O)O"
     ]
 
-    assert expected == df.MOL.to_smiles().tolist()
+    assert expected == df.MOL.chem.to_smiles().tolist()
 
 def test_series_to_molecule_string():
     """
@@ -368,7 +380,7 @@ def test_series_to_molecule_string():
     ]
 
     # Canonical isomeric SMILES
-    df["TEST"] = df.MOL.to_molecule_strings(molecule_format="smiles")
+    df["TEST"] = df.MOL.chem.to_molecule_strings(molecule_format="smiles")
     assert expected_strings == df.TEST.tolist()
 
     # ----------------------------------------------
@@ -393,7 +405,7 @@ def test_series_to_molecule_string():
     ]
 
     # SDF v3000
-    df["TEST"] = df.MOL.to_molecule_strings(
+    df["TEST"] = df.MOL.chem.to_molecule_strings(
         molecule_format=oechem.OEFormat_SDF,
         flavor=oechem.OEGetDefaultOFlavor(oechem.OEFormat_SDF) | oechem.OEOFlavor_SDF_MV30
     )
@@ -425,7 +437,7 @@ def test_series_to_molecule_string():
     ]
 
     # SDF v3000 with forced b64 encoding
-    df["TEST"] = df.MOL.to_molecule_strings(
+    df["TEST"] = df.MOL.chem.to_molecule_strings(
         molecule_format=oechem.OEFormat_SDF,
         flavor=oechem.OEGetDefaultOFlavor(oechem.OEFormat_SDF) | oechem.OEOFlavor_SDF_MV30,
         b64encode=True
@@ -458,7 +470,7 @@ def test_series_to_molecule_string():
     ]
 
     # SDF v3000 gzipped
-    df["TEST"] = df.MOL.to_molecule_strings(
+    df["TEST"] = df.MOL.chem.to_molecule_strings(
         molecule_format=oechem.OEFormat_SDF,
         flavor=oechem.OEGetDefaultOFlavor(oechem.OEFormat_SDF) | oechem.OEOFlavor_SDF_MV30,
         gzip=True
@@ -470,7 +482,7 @@ def test_series_to_molecule_string():
     # ----------------------------------------------
 
     # SDF v3000 gzipped by file format extension
-    df["TEST"] = df.MOL.to_molecule_strings(
+    df["TEST"] = df.MOL.chem.to_molecule_strings(
         molecule_format=".sdf.gz",
         flavor=oechem.OEGetDefaultOFlavor(oechem.OEFormat_SDF) | oechem.OEOFlavor_SDF_MV30,
     )
@@ -510,7 +522,7 @@ def test_series_to_molecule_bytes():
     ]
 
     # Canonical isomeric SMILES
-    df["TEST"] = df.MOL.to_molecule_bytes(molecule_format=oechem.OEFormat_SMI)
+    df["TEST"] = df.MOL.chem.to_molecule_bytes(molecule_format=oechem.OEFormat_SMI)
     assert expected_bytes == df.TEST.tolist()
 
     # ----------------------------------------------
@@ -535,7 +547,7 @@ def test_series_to_molecule_bytes():
     ]
 
     # SDF v3000
-    df["TEST"] = df.MOL.to_molecule_bytes(
+    df["TEST"] = df.MOL.chem.to_molecule_bytes(
         molecule_format=oechem.OEFormat_SDF,
         flavor=oechem.OEGetDefaultOFlavor(oechem.OEFormat_SDF) | oechem.OEOFlavor_SDF_MV30
     )
@@ -563,7 +575,7 @@ def test_series_to_molecule_bytes():
     ]
 
     # SDF v3000 gzipped
-    df["TEST"] = df.MOL.to_molecule_bytes(
+    df["TEST"] = df.MOL.chem.to_molecule_bytes(
         molecule_format=oechem.OEFormat_SDF,
         flavor=oechem.OEGetDefaultOFlavor(oechem.OEFormat_SDF) | oechem.OEOFlavor_SDF_MV30,
         gzip=True
@@ -575,7 +587,7 @@ def test_series_to_molecule_bytes():
     # ----------------------------------------------
 
     # SDF v3000 gzipped by file format extension
-    df["TEST"] = df.MOL.to_molecule_bytes(
+    df["TEST"] = df.MOL.chem.to_molecule_bytes(
         molecule_format=".sdf.gz",
         flavor=oechem.OEGetDefaultOFlavor(oechem.OEFormat_SDF) | oechem.OEOFlavor_SDF_MV30,
     )
@@ -586,7 +598,7 @@ def test_copy_molecule(test_mols):
     Copy molecules
     """
     df = pd.DataFrame({"Molecule": pd.Series(MoleculeArray(copy_mols(test_mols)), dtype=MoleculeDtype())})
-    df["Molecule2"] = df.Molecule.copy_molecules()
+    df["Molecule2"] = df.Molecule.chem.copy_molecules()
 
     molecules1 = set(df.Molecule.tolist())
     molecules2 = set(df.Molecule2.tolist())
@@ -617,7 +629,7 @@ def test_to_molecule_csv():
         df["MOL"] = df.MOL.astype(MoleculeDtype())
 
         outpath = Path(tempdir, "test.csv")
-        df.to_molecule_csv(outpath)
+        df.chem.to_molecule_csv(outpath)
         assert outpath.exists()
 
         # Expected data
@@ -641,7 +653,7 @@ def test_series_subsearch():
     SMARTS matching in a Pandas Series
     """
     df = oepd.read_sdf(Path(ASSETS, "10.sdf"))
-    view = df[df.Molecule.subsearch("S(=O)=O")]
+    view = df[df.Molecule.chem.subsearch("S(=O)=O")]
     assert len(view) == 1
     assert view.iloc[0].Title == 'Omeprazole'
 
@@ -657,7 +669,7 @@ def test_detect_molecule_columns():
     })
 
     # Do the column detection
-    df.detect_molecule_columns()
+    df.chem.detect_molecule_columns()
 
     assert isinstance(df.dtypes["IsMolecule"], MoleculeDtype)
     assert isinstance(df.dtypes["IsAlsoMolecule"], MoleculeDtype)

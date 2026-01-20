@@ -247,38 +247,35 @@ class TestFileReaders:
 
 class TestFileWriters:
     """Test file writing functionality through pandas accessors"""
-    
+
     def test_dataframe_write_sdf(self, test_molecules):
         df = pd.DataFrame({
             "Molecule": oepd.MoleculeArray(test_molecules),
             "Name": ["ethanol", "propane", "methane", "ethane"]
         })
-        
+
         with TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "test_output.sdf"
-            
-            # Test if the accessor exists and can be called
-            if hasattr(df, 'to_sdf'):
-                df.to_sdf(str(output_path), "Molecule")
-                assert output_path.exists()
-                assert output_path.stat().st_size > 0
+
+            # Test the oe accessor
+            df.chem.to_sdf(str(output_path), "Molecule")
+            assert output_path.exists()
+            assert output_path.stat().st_size > 0
 
 
 class TestPandasAccessors:
     """Test pandas series/dataframe accessors"""
-    
+
     def test_molecule_series_accessors(self, test_molecules):
         series = pd.Series(oepd.MoleculeArray(test_molecules), dtype=oepd.MoleculeDtype())
-        
-        # Test to_smiles accessor if it exists
-        if hasattr(series, 'to_smiles'):
-            smiles = series.to_smiles()
-            assert len(smiles) == len(test_molecules)
-        
-        # Test copy_molecules accessor if it exists
-        if hasattr(series, 'copy_molecules'):
-            copied = series.copy_molecules()
-            assert len(copied) == len(test_molecules)
+
+        # Test to_smiles accessor via oe namespace
+        smiles = series.chem.to_smiles()
+        assert len(smiles) == len(test_molecules)
+
+        # Test copy_molecules accessor via oe namespace
+        copied = series.chem.copy_molecules()
+        assert len(copied) == len(test_molecules)
 
 
 class TestErrorHandling:

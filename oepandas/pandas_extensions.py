@@ -33,8 +33,8 @@ log = logging.getLogger("oepandas")
 class MoleculeReaderOptions(TypedDict, total=False):
     """Options for reading molecules into a DataFrame (PEP 692)."""
     flavor: int | None
-    molecule_column_name: str
-    title_column_name: str | None
+    molecule_column: str
+    title_column: str | None
     add_smiles: None | bool | str | Iterable[str]
     molecule_columns: None | str | Iterable[str]
     expand_confs: bool
@@ -352,8 +352,8 @@ def _read_molecules_to_dataframe(
     filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
     *,
     flavor: int | None = oechem.OEIFlavor_SDF_Default,
-    molecule_column_name: str = "Molecule",
-    title_column_name: str | None = "Title",
+    molecule_column: str = "Molecule",
+    title_column: str | None = "Title",
     add_smiles: None | bool | str | Iterable[str] = None,
     molecule_columns: None | str | Iterable[str] = None,
     expand_confs: bool = False,
@@ -372,8 +372,8 @@ def _read_molecules_to_dataframe(
     :param reader: MoleculeArray method to use to read molecule
     :param filepath_or_buffer: File path or buffer
     :param flavor: SMILES flavor (part of oechem.OEIFlavor namespace)
-    :param molecule_column_name: Name of the molecule column in the dataframe
-    :param title_column_name: Name of the column with molecule titles in the dataframe
+    :param molecule_column: Name of the molecule column in the dataframe
+    :param title_column: Name of the column with molecule titles in the dataframe
     :param add_smiles: Include a SMILES column in the dataframe (SMILES will be re-canonicalized)
     :param expand_confs: Expand conformers (i.e., create a new molecule for each conformer)
     :param molecule_columns: Additional columns to convert to molecules
@@ -408,8 +408,8 @@ def _read_molecules_to_dataframe(
             numeric_columns = {col: None for col in numeric_columns}
 
         # Sanity check the molecule column
-        if molecule_column_name in numeric_columns:
-            raise KeyError(f'Cannot make molecule column {molecule_column_name} numeric')
+        if molecule_column in numeric_columns:
+            raise KeyError(f'Cannot make molecule column {molecule_column} numeric')
 
     # --------------------------------------------------
     # Start building our DataFrame with the molecules
@@ -428,15 +428,15 @@ def _read_molecules_to_dataframe(
                 conf_idx.append(conf.GetIdx())
 
         data = {
-            molecule_column_name: pd.Series(data=confs, dtype=MoleculeDtype()),
+            molecule_column: pd.Series(data=confs, dtype=MoleculeDtype()),
             conf_index_column_name: pd.Series(data=conf_idx, dtype=str)
         }
     else:
-        data = {molecule_column_name: pd.Series(data=mols, dtype=MoleculeDtype())}
+        data = {molecule_column: pd.Series(data=mols, dtype=MoleculeDtype())}
 
     # Add titles to the dataframe
-    if title_column_name is not None:
-        data[title_column_name] = pd.Series(
+    if title_column is not None:
+        data[title_column] = pd.Series(
             [mol.GetTitle() if isinstance(mol, oechem.OEMolBase) else None for mol in mols],
             dtype=str
         )
@@ -505,9 +505,9 @@ def _read_molecules_to_dataframe(
     if len(df) > 0:
 
         if molecule_columns is not None:
-            if isinstance(molecule_columns, str) and molecule_columns != molecule_column_name:
+            if isinstance(molecule_columns, str) and molecule_columns != molecule_column:
                     if molecule_columns in df.columns:
-                        df.as_molecule(molecule_columns, inplace=True)  # noqa
+                        df.chem.as_molecule(molecule_columns, inplace=True)
                     else:
                         log.warning(f'Column not found in DataFrame: {molecule_columns}')
 
@@ -521,8 +521,8 @@ def _read_molecules_to_dataframe(
                     if col in df.columns:
 
                         # We don't need to convert the primary molecule column
-                        if col != molecule_column_name:
-                            df.as_molecule(col, inplace=True)  # noqa
+                        if col != molecule_column:
+                            df.chem.as_molecule(col, inplace=True)
 
                     else:
                         log.warning(f'Column not found in DataFrame: {col}')
@@ -556,7 +556,7 @@ def _read_molecules_to_dataframe(
 
             # Only adding SMILES to the primary molecule column
             if molecule_columns is None:
-                molecule_columns = [molecule_column_name]
+                molecule_columns = [molecule_column]
 
             _add_smiles_columns(df, molecule_columns, add_smiles)
 
@@ -580,9 +580,9 @@ def read_molecule_csv(
     # Convert molecule columns if we have data
     if len(df) > 0:
         if molecule_columns == "detect":
-            df.detect_molecule_columns()  # noqa
+            df.chem.detect_molecule_columns()
         else:
-            df.as_molecule(molecule_columns, inplace=True)  # noqa
+            df.chem.as_molecule(molecule_columns, inplace=True)
 
     # Process 'add_smiles' by first standardizing it to a dictionary
     if add_smiles is not None:
@@ -598,8 +598,8 @@ def read_smi(
     flavor: int | None = None,
     add_smiles: bool = False,
     add_inchi_key: bool = False,
-    molecule_column_name: str = "Molecule",
-    title_column_name: str = "Title",
+    molecule_column: str = "Molecule",
+    title_column: str = "Title",
     smiles_column_name: str = "SMILES",
     inchi_key_column_name: str = "InChI Key"
 ) -> pd.DataFrame:
@@ -610,8 +610,8 @@ def read_smi(
     :param flavor: SMILES flavor (part of oechem.OEIFlavor namespace)
     :param add_smiles: Include a SMILES column in the dataframe (SMILES will be re-canonicalized)
     :param add_inchi_key: Include an InChI key column in the dataframe
-    :param molecule_column_name: Name of the molecule column in the dataframe
-    :param title_column_name: Name of the column with molecule titles in the dataframe
+    :param molecule_column: Name of the molecule column in the dataframe
+    :param title_column: Name of the column with molecule titles in the dataframe
     :param smiles_column_name: Name of the SMILES column (if smiles is True)
     :param inchi_key_column_name: Name of the InChI key column (if inchi_key is True)
     :return: DataFrame with molecules
@@ -622,7 +622,7 @@ def read_smi(
     data = []
 
     # Configure the column headers and order
-    columns = [title_column_name, molecule_column_name]
+    columns = [title_column, molecule_column]
 
     if add_smiles:
         columns.append(smiles_column_name)
@@ -644,7 +644,7 @@ def read_smi(
             file_format=oechem.OEFormat_CXSMILES if cx else oechem.OEFormat_SMI,
             flavor=flavor,
     ):
-        row_data = {title_column_name: mol.GetTitle(), molecule_column_name: mol.CreateCopy()}
+        row_data = {title_column: mol.GetTitle(), molecule_column: mol.CreateCopy()}
 
         # If adding smiles
         if add_smiles:
@@ -660,7 +660,7 @@ def read_smi(
 
     # Convert only if the dataframe is not empty
     if len(df) > 0:
-        df.as_molecule(molecule_column_name, inplace=True)  # noqa
+        df.chem.as_molecule(molecule_column, inplace=True)
 
     return df
 
@@ -669,8 +669,8 @@ def read_sdf(
     filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
     *,
     flavor: int | None = oechem.OEIFlavor_SDF_Default,
-    molecule_column_name: str = "Molecule",
-    title_column_name: str | None = "Title",
+    molecule_column: str = "Molecule",
+    title_column: str | None = "Title",
     add_smiles: None | bool | str | Iterable[str] = None,
     molecule_columns: None | str | Iterable[str] = None,
     usecols: None | str | Iterable[str] = None,
@@ -705,9 +705,9 @@ def read_sdf(
     :param filepath_or_buffer: File path or buffer
     :param flavor: SMILES flavor (part of oechem.OEIFlavor namespace)
     :param add_smiles: Include a SMILES column in the dataframe (SMILES will be re-canonicalized)
-    :param molecule_column_name: Name of the molecule column in the dataframe
+    :param molecule_column: Name of the molecule column in the dataframe
     :param molecule_columns: Additional columns to convert to molecules
-    :param title_column_name: Name of the column with molecule titles in the dataframe
+    :param title_column: Name of the column with molecule titles in the dataframe
     :param usecols: List of SD tags to read (default is all SD data is read)
     :param numeric: Data column(s) to make numeric
     :param conformer_test: Combine single conformer molecules into multiconformer
@@ -718,8 +718,8 @@ def read_sdf(
         MoleculeArray.read_sdf,
         filepath_or_buffer,
         flavor=flavor,
-        molecule_column_name=molecule_column_name,
-        title_column_name=title_column_name,
+        molecule_column=molecule_column,
+        title_column=title_column,
         add_smiles=add_smiles,
         molecule_columns=molecule_columns,
         generic_data=False,
@@ -734,8 +734,8 @@ def read_oeb(
     filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
     *,
     flavor: int | None = oechem.OEIFlavor_SDF_Default,
-    molecule_column_name: str = "Molecule",
-    title_column_name: str | None = "Title",
+    molecule_column: str = "Molecule",
+    title_column: str | None = "Title",
     add_smiles: None | bool | str | Iterable[str] = None,
     molecule_columns: None | str | Iterable[str] = None,
     read_generic_data: bool = True,
@@ -774,9 +774,9 @@ def read_oeb(
     :param filepath_or_buffer: File path or buffer
     :param flavor: SMILES flavor (part of oechem.OEIFlavor namespace)
     :param add_smiles: Include a SMILES column in the dataframe (SMILES will be re-canonicalized)
-    :param molecule_column_name: Name of the molecule column in the dataframe
+    :param molecule_column: Name of the molecule column in the dataframe
     :param molecule_columns: Additional columns to convert to molecules
-    :param title_column_name: Name of the column with molecule titles in the dataframe
+    :param title_column: Name of the column with molecule titles in the dataframe
     :param read_generic_data: If True, read generic data (default is True)
     :param read_sd_data: If True, read SD data (default is True)
     :param usecols: List of data tags to read (default is all read all generic and SD data)
@@ -791,8 +791,8 @@ def read_oeb(
         MoleculeArray.read_oeb,
         filepath_or_buffer,
         flavor=flavor,
-        molecule_column_name=molecule_column_name,
-        title_column_name=title_column_name,
+        molecule_column=molecule_column,
+        title_column=title_column,
         add_smiles=add_smiles,
         molecule_columns=molecule_columns,
         generic_data=read_generic_data,
@@ -924,394 +924,8 @@ def read_oedb(
 
 
 ########################################################################################################################
-# Molecule Array: DataFrame Extensions
+# DataFrame and Series Accessors (unified under "chem" namespace)
 ########################################################################################################################
-
-@register_dataframe_accessor("as_molecule")
-class DataFrameAsMoleculeAccessor:
-    def __init__(self, pandas_obj):
-        self._obj = pandas_obj
-
-    def __call__(
-            self,
-            columns: str | Iterable[str],
-            *,
-            molecule_format: str | int | None = None,
-            inplace=False
-    ) -> pd.DataFrame:
-        molecule_format = molecule_format or oechem.OEFormat_SMI
-
-        # noinspection DuplicatedCode
-        columns = [columns] if isinstance(columns, str) else list(columns)
-
-        for name in columns:
-            if name not in self._obj.columns:
-                raise KeyError(f'Column {name} not found in DataFrame: {", ".join(self._obj.columns)}')
-
-        # Only convert columns that aren't already MoleculeDtype
-        to_convert = [col for col in columns if not isinstance(self._obj[col].dtype, MoleculeDtype)]
-
-        if not inplace:
-            df = self._obj
-            if to_convert:
-                df = self._obj.copy()
-        else:
-            df = self._obj
-
-        for col in columns:
-            if not isinstance(df[col].dtype, MoleculeDtype):
-                df[col] = pd.Series(
-                    _series_to_molecule_array(
-                        df[col],
-                        molecule_format=molecule_format
-                    ),
-                    index=df.index,
-                    dtype=MoleculeDtype()
-                )
-
-        return df
-
-
-@register_dataframe_accessor("filter_invalid_molecules")
-class FilterInvalidMoleculesAccessor:
-    """
-    Filter invalid molecules in one or more columns
-    """
-    def __init__(self, pandas_obj):
-        self._obj = pandas_obj
-
-    def __call__(
-            self,
-            columns: str | Iterable[str],
-            *,
-            inplace=False
-    ):
-        cols = [columns] if isinstance(columns, str) else list(columns)
-        for name in cols:
-            if name not in self._obj.columns:
-                raise KeyError(f'Column {name} not found in DataFrame')
-
-        # Build mask: start with all True
-        mask = np.ones(len(self._obj), dtype=bool)
-        for col in cols:
-            if isinstance(self._obj[col].dtype, MoleculeDtype):
-                mask &= self._obj[col].array.valid()
-
-        if inplace:
-            self._obj.drop(self._obj[~mask].index, inplace=True)
-            return self._obj
-
-        if mask.all():
-            return self._obj
-
-        df = self._obj.copy()
-        return df.drop(df[~mask].index)
-
-
-@register_dataframe_accessor("detect_molecule_columns")
-class DataFrameDetectMoleculeColumnsAccessor:
-    def __init__(self, pandas_obj: pd.DataFrame):
-        self._obj = pandas_obj
-
-    def __call__(self, *, sample_size: int = 25) -> None:
-        """
-        Detects molecule columns based on their predominant type and convert them to MoleculeDtype. This works if
-        the columns primarily contain objects that derive from oechem.OEMolBase (all OpenEye molecule objects).
-        :param sample_size: Maximum number of non-null values to sample to determine column type
-        """
-        molecule_columns = []
-
-        for col in self._obj.columns:
-            if self._obj[col].dtype != MoleculeDtype():
-                t = predominant_type(self._obj[col], sample_size=sample_size)
-                if t is not None and issubclass(t, oechem.OEMolBase):
-                    molecule_columns.append(col)
-
-        if molecule_columns:
-            self._obj.as_molecule(molecule_columns, inplace=True)  # noqa
-
-
-@register_dataframe_accessor("to_sdf")
-class WriteToSDFAccessor:
-    """
-    Write to SD file
-    """
-
-    def __init__(self, pandas_obj):
-        self._obj = pandas_obj
-
-    def __call__(
-            self,
-            fp: FilePath,
-            primary_molecule_column,
-            *,
-            title_column: str | None = None,
-            columns: str | Iterable[str] | None = None,
-            index: bool = True,
-            index_tag: str = "index",
-            secondary_molecules_as: int | str = "smiles",
-            secondary_molecule_flavor: int | str | None = None,
-            gzip: bool = False
-    ) -> None:
-        """
-        Write DataFrame to an SD file
-        Note: Writing conformers not yet supported
-        :param primary_molecule_column: Primary molecule column
-        :param columns: Optional column(s) to include as SD tags
-        :param index: Write index
-        :param index_tag: SD tag for writing index
-        :param secondary_molecules_as: Encoding for secondary molecules (default: SMILES)
-        :return:
-        """
-        # Convert to file path
-        fp = Path(fp)
-
-        # Make sure we're working with a list of columns
-        if columns is None:
-            columns = list(self._obj.columns)
-
-        elif isinstance(columns, str):
-            columns = [columns]
-
-        else:
-            columns = list(columns)
-
-        # Validate primary molecule column
-        if primary_molecule_column not in self._obj.columns:
-            raise KeyError(f'Primary molecule column {primary_molecule_column} not found in DataFrame')
-
-        if not isinstance(self._obj[primary_molecule_column].dtype, MoleculeDtype):
-            raise TypeError(f'Primary molecule column {primary_molecule_column} is not a MoleculeDtype')
-
-        # Validate title column
-        if title_column is not None and title_column not in self._obj.columns:
-            raise KeyError(f'Title column {title_column} not found in DataFrame')
-
-        # Set of secondary molecule columns
-        secondary_molecule_cols = set()
-
-        # Create the secondary molecule writer
-        secondary_molecule_to_string = create_molecule_to_string_writer(
-            fmt=secondary_molecules_as,
-            flavor=secondary_molecule_flavor,
-            gzip=False,
-            b64encode=False,
-            strip=True
-        )
-
-        for col in columns:
-            if col not in self._obj.columns:
-                raise KeyError(f'Column {col} not found in DataFrame')
-
-            if col != primary_molecule_column and isinstance(self._obj[col].dtype, MoleculeDtype):
-                secondary_molecule_cols.add(col)
-
-        # Process the molecules
-        with oechem.oemolostream(str(fp)) as ofs:
-
-            # Force SD format
-            ofs.SetFormat(oechem.OEFormat_SDF)
-            ofs.Setgz(gzip or is_gz(fp))
-
-            for idx, row in self._obj.iterrows():
-
-                # Primary molecule
-                primary_mol = row[primary_molecule_column]
-
-                if primary_mol is None:
-
-                    primary_mol = oechem.OEGraphMol()
-
-                else:
-
-                    if isinstance(primary_mol, oechem.OEGraphMol):
-                        primary_mol = oechem.OEGraphMol(primary_mol)
-
-                    elif isinstance(primary_mol, oechem.OEMol):
-                        primary_mol = oechem.OEGraphMol(primary_mol) if primary_mol.NumConfs() == 1 else \
-                                oechem.OEMol(primary_mol)
-
-                    else:
-                        log.warning(
-                            "Not an OpenEye molecule object {} (type: {})",
-                            str(primary_mol),
-                            type(primary_mol).__name__
-                        )
-
-                        primary_mol = oechem.OEGraphMol()
-
-                # Set the title
-                if title_column is not None:
-                    primary_mol.SetTitle(str(row[title_column]))
-
-                for col in columns:
-
-                    # Secondary molecule column
-                    if col in secondary_molecule_cols:
-                        oechem.OESetSDData(
-                            primary_mol,
-                            col,
-                            secondary_molecule_to_string(row[col])
-                        )
-
-                    # Everything else (except our primary molecule column)
-                    elif col != primary_molecule_column:
-                        oechem.OESetSDData(
-                            primary_mol,
-                            col,
-                            str(row[col])
-                        )
-
-                # Write out the molecule
-                oechem.OEWriteMolecule(ofs, primary_mol)
-
-
-@register_dataframe_accessor("to_smi")
-class WriteToSmilesAccessor:
-    """
-    Write to SD file
-    """
-
-    def __init__(self, pandas_obj):
-        self._obj = pandas_obj
-
-    def __call__(
-            self,
-            fp: FilePath,
-            primary_molecule_column: str,
-            *,
-            flavor: int | None = None,
-            molecule_format: str | int = oechem.OEFormat_SMI,
-            title_column: str | None = None,
-            gzip: bool = False
-    ) -> None:
-        """
-        Write DataFrame to an SD file
-        Note: Writing conformers not yet supported
-        :param primary_molecule_column: Primary molecule column
-        :param title_column: Optional column to get molecule titles
-        """
-        # Convert to a path
-        fp = Path(fp)
-
-        # Validate molecule format
-        fmt = get_oeformat(
-            molecule_format,
-            gzip or is_gz(fp)
-        )
-
-        if fmt.oeformat not in (oechem.OEFormat_SMI, oechem.OEFormat_ISM, oechem.OEFormat_CXSMILES,
-                                oechem.OEFormat_USM):
-            raise ValueError("to_smi can only take SMILES formats as a molecule_format")
-
-        # Validate title column
-        if title_column is not None and title_column not in self._obj.columns:
-            raise KeyError(f'Title column {title_column} not found in DataFrame')
-
-        # Validate primary molecule column
-        if primary_molecule_column not in self._obj.columns:
-            raise KeyError(f'Primary molecule column {primary_molecule_column} not found in DataFrame')
-        if not isinstance(self._obj[primary_molecule_column].dtype, MoleculeDtype):
-            raise TypeError(f'Primary molecule column {primary_molecule_column} is not a MoleculeDtype')
-
-        # Process the molecules
-        with oechem.oemolostream(str(fp)) as ofs:
-
-            # Set the output file stream attributes
-            ofs.SetFormat(fmt.oeformat)
-            ofs.Setgz(fmt.gzip)
-
-            for idx, row in self._obj.iterrows():
-                mol = row[primary_molecule_column].CreateCopy()
-
-                # Set the title
-                if title_column is not None:
-                    mol.SetTitle(str(row[title_column]))
-
-                # Write out the molecule
-                oechem.OEWriteMolecule(ofs, mol)
-
-
-@register_dataframe_accessor("to_molecule_csv")
-class WriteToMoleculeCSVAccessor:
-    """
-    Write to a CSV file containing molecules
-    """
-    def __init__(self, pandas_obj: pd.DataFrame):
-        self._obj = pandas_obj.copy()
-
-    def __call__(
-            self,
-            fp: FilePath,
-            *,
-            molecule_format: str | int = "smiles",
-            flavor: int | None = None,
-            gzip: bool = False,
-            b64encode: bool = False,
-            columns: str | Iterable[str] | None = None,
-            index: bool = True,
-            sep=',',
-            na_rep='',
-            float_format=None,
-            header=True,
-            encoding=None,
-            lineterminator=None,
-            date_format=None,
-            quoting=None,
-            quotechar='"',
-            doublequote=True,
-            escapechar=None,
-            decimal='.',
-            index_label: str = "index",
-    ) -> None:
-        """
-        Write to a CSV file with molecules
-        :param fp: File path
-        :param molecule_format: Molecule file format
-        :param columns: Columns to include in the output CSV
-        :param index: Whether to write the index
-        :param sep: String of length 1. Field delimiter for the output file
-        :param na_rep: Missing data representation
-        :param float_format: Format string for floating point numbers
-        :param header: Write out the column names. A list of strings is assumed to be aliases for the column names.
-        :param encoding: A string representing the encoding to use in the output file ('utf-8' is default)
-        :param lineterminator: Newline character or character sequence to use. Default is system dependent.
-        :param date_format: Format string for datetime objects.
-        :param quoting: Defaults to csv.QUOTE_MINIMAL
-        :param quotechar: String of length 1. Character used to quote fields.
-        :param doublequote: Control quoting of quotechar inside a field.
-        :param escapechar: String of length 1. Character used to escape sep and quotechar when appropriate.
-        :param decimal: Character recognized as decimal separator. E.g., use ‘,’ for European data.
-        :param index_label: Column label to use for the index
-        """
-        # Convert all the molecule columns to string arrays
-        for col in self._obj.columns:
-            if isinstance(self._obj.dtypes[col], MoleculeDtype):
-                self._obj[col] = self._obj[col].to_molecule_strings(
-                    molecule_format=molecule_format,
-                    flavor=flavor,
-                    gzip=gzip,
-                    b64encode=b64encode
-                )
-
-        # Write to CSV
-        self._obj.to_csv(
-            fp,
-            sep=sep,
-            na_rep=na_rep,
-            float_format=float_format,
-            columns=columns,
-            header=header,
-            index=index,
-            index_label=index_label,
-            lineterminator=lineterminator,
-            encoding=encoding,
-            date_format=date_format,
-            doublequote=doublequote,
-            escapechar=escapechar,
-            decimal=decimal
-        )
-
 
 _FLOAT_TYPES = (
     pd.Float32Dtype,
@@ -1366,16 +980,343 @@ _BYTES_TYPES = (
 )
 
 
-@register_dataframe_accessor("to_oedb")
-class WriteToOEDB:
+@register_dataframe_accessor("chem")
+class OEDataFrameAccessor:
     """
-    Write to a CSV file containing molecules
-    TODO: Add compress_confs argument to compress conformers into single multi-conformer molecules
+    Unified accessor for all OpenEye-related DataFrame operations.
+    Access via df.chem.<method>()
     """
-    def __init__(self, pandas_obj: pd.DataFrame):
-        self._obj = pandas_obj.copy()
 
-    def __call__(
+    def __init__(self, pandas_obj: pd.DataFrame):
+        self._obj = pandas_obj
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # Molecule methods
+    # ------------------------------------------------------------------------------------------------------------------
+
+    def as_molecule(
+            self,
+            columns: str | Iterable[str],
+            *,
+            molecule_format: str | int | None = None,
+            inplace: bool = False
+    ) -> pd.DataFrame:
+        """
+        Convert column(s) to MoleculeDtype.
+        :param columns: Column name(s) to convert
+        :param molecule_format: File format for parsing (default: SMILES)
+        :param inplace: Modify DataFrame in place
+        :return: DataFrame with converted columns
+        """
+        molecule_format = molecule_format or oechem.OEFormat_SMI
+
+        columns = [columns] if isinstance(columns, str) else list(columns)
+
+        for name in columns:
+            if name not in self._obj.columns:
+                raise KeyError(f'Column {name} not found in DataFrame: {", ".join(self._obj.columns)}')
+
+        to_convert = [col for col in columns if not isinstance(self._obj[col].dtype, MoleculeDtype)]
+
+        if not inplace:
+            df = self._obj
+            if to_convert:
+                df = self._obj.copy()
+        else:
+            df = self._obj
+
+        for col in columns:
+            if not isinstance(df[col].dtype, MoleculeDtype):
+                df[col] = pd.Series(
+                    _series_to_molecule_array(
+                        df[col],
+                        molecule_format=molecule_format
+                    ),
+                    index=df.index,
+                    dtype=MoleculeDtype()
+                )
+
+        return df
+
+    def filter_valid(
+            self,
+            columns: str | Iterable[str],
+            *,
+            inplace: bool = False
+    ) -> pd.DataFrame:
+        """
+        Filter rows with invalid molecules in one or more columns.
+        :param columns: Column name(s) to check
+        :param inplace: Modify DataFrame in place
+        :return: Filtered DataFrame
+        """
+        cols = [columns] if isinstance(columns, str) else list(columns)
+        for name in cols:
+            if name not in self._obj.columns:
+                raise KeyError(f'Column {name} not found in DataFrame')
+
+        mask = np.ones(len(self._obj), dtype=bool)
+        for col in cols:
+            if isinstance(self._obj[col].dtype, MoleculeDtype):
+                mask &= self._obj[col].array.valid()
+
+        if inplace:
+            self._obj.drop(self._obj[~mask].index, inplace=True)
+            return self._obj
+
+        if mask.all():
+            return self._obj
+
+        df = self._obj.copy()
+        return df.drop(df[~mask].index)
+
+    def detect_molecule_columns(self, *, sample_size: int = 25) -> None:
+        """
+        Detects molecule columns based on their predominant type and convert them to MoleculeDtype.
+        This works if the columns primarily contain objects that derive from oechem.OEMolBase.
+        :param sample_size: Maximum number of non-null values to sample to determine column type
+        """
+        molecule_columns = []
+
+        for col in self._obj.columns:
+            if self._obj[col].dtype != MoleculeDtype():
+                t = predominant_type(self._obj[col], sample_size=sample_size)
+                if t is not None and issubclass(t, oechem.OEMolBase):
+                    molecule_columns.append(col)
+
+        if molecule_columns:
+            self._obj.chem.as_molecule(molecule_columns, inplace=True)
+
+    def to_sdf(
+            self,
+            fp: FilePath,
+            primary_molecule_column: str,
+            *,
+            title_column: str | None = None,
+            columns: str | Iterable[str] | None = None,
+            index: bool = True,
+            index_tag: str = "index",
+            secondary_molecules_as: int | str = "smiles",
+            secondary_molecule_flavor: int | str | None = None,
+            gzip: bool = False
+    ) -> None:
+        """
+        Write DataFrame to an SD file.
+        Note: Writing conformers not yet supported
+        :param fp: File path
+        :param primary_molecule_column: Primary molecule column
+        :param title_column: Optional column for molecule titles
+        :param columns: Optional column(s) to include as SD tags
+        :param index: Write index
+        :param index_tag: SD tag for writing index
+        :param secondary_molecules_as: Encoding for secondary molecules (default: SMILES)
+        :param secondary_molecule_flavor: Flavor for secondary molecule encoding
+        :param gzip: Gzip the output file
+        """
+        fp = Path(fp)
+
+        if columns is None:
+            columns = list(self._obj.columns)
+        elif isinstance(columns, str):
+            columns = [columns]
+        else:
+            columns = list(columns)
+
+        if primary_molecule_column not in self._obj.columns:
+            raise KeyError(f'Primary molecule column {primary_molecule_column} not found in DataFrame')
+
+        if not isinstance(self._obj[primary_molecule_column].dtype, MoleculeDtype):
+            raise TypeError(f'Primary molecule column {primary_molecule_column} is not a MoleculeDtype')
+
+        if title_column is not None and title_column not in self._obj.columns:
+            raise KeyError(f'Title column {title_column} not found in DataFrame')
+
+        secondary_molecule_cols = set()
+
+        secondary_molecule_to_string = create_molecule_to_string_writer(
+            fmt=secondary_molecules_as,
+            flavor=secondary_molecule_flavor,
+            gzip=False,
+            b64encode=False,
+            strip=True
+        )
+
+        for col in columns:
+            if col not in self._obj.columns:
+                raise KeyError(f'Column {col} not found in DataFrame')
+
+            if col != primary_molecule_column and isinstance(self._obj[col].dtype, MoleculeDtype):
+                secondary_molecule_cols.add(col)
+
+        with oechem.oemolostream(str(fp)) as ofs:
+            ofs.SetFormat(oechem.OEFormat_SDF)
+            ofs.Setgz(gzip or is_gz(fp))
+
+            for idx, row in self._obj.iterrows():
+                primary_mol = row[primary_molecule_column]
+
+                if primary_mol is None:
+                    primary_mol = oechem.OEGraphMol()
+                else:
+                    if isinstance(primary_mol, oechem.OEGraphMol):
+                        primary_mol = oechem.OEGraphMol(primary_mol)
+                    elif isinstance(primary_mol, oechem.OEMol):
+                        primary_mol = oechem.OEGraphMol(primary_mol) if primary_mol.NumConfs() == 1 else \
+                                oechem.OEMol(primary_mol)
+                    else:
+                        log.warning(
+                            "Not an OpenEye molecule object {} (type: {})",
+                            str(primary_mol),
+                            type(primary_mol).__name__
+                        )
+                        primary_mol = oechem.OEGraphMol()
+
+                if title_column is not None:
+                    primary_mol.SetTitle(str(row[title_column]))
+
+                for col in columns:
+                    if col in secondary_molecule_cols:
+                        oechem.OESetSDData(
+                            primary_mol,
+                            col,
+                            secondary_molecule_to_string(row[col])
+                        )
+                    elif col != primary_molecule_column:
+                        oechem.OESetSDData(
+                            primary_mol,
+                            col,
+                            str(row[col])
+                        )
+
+                oechem.OEWriteMolecule(ofs, primary_mol)
+
+    def to_smi(
+            self,
+            fp: FilePath,
+            primary_molecule_column: str,
+            *,
+            flavor: int | None = None,
+            molecule_format: str | int = oechem.OEFormat_SMI,
+            title_column: str | None = None,
+            gzip: bool = False
+    ) -> None:
+        """
+        Write DataFrame to a SMILES file.
+        Note: Writing conformers not yet supported
+        :param fp: File path
+        :param primary_molecule_column: Primary molecule column
+        :param flavor: SMILES flavor
+        :param molecule_format: SMILES format variant
+        :param title_column: Optional column to get molecule titles
+        :param gzip: Gzip the output file
+        """
+        fp = Path(fp)
+
+        fmt = get_oeformat(
+            molecule_format,
+            gzip or is_gz(fp)
+        )
+
+        if fmt.oeformat not in (oechem.OEFormat_SMI, oechem.OEFormat_ISM, oechem.OEFormat_CXSMILES,
+                                oechem.OEFormat_USM):
+            raise ValueError("to_smi can only take SMILES formats as a molecule_format")
+
+        if title_column is not None and title_column not in self._obj.columns:
+            raise KeyError(f'Title column {title_column} not found in DataFrame')
+
+        if primary_molecule_column not in self._obj.columns:
+            raise KeyError(f'Primary molecule column {primary_molecule_column} not found in DataFrame')
+        if not isinstance(self._obj[primary_molecule_column].dtype, MoleculeDtype):
+            raise TypeError(f'Primary molecule column {primary_molecule_column} is not a MoleculeDtype')
+
+        with oechem.oemolostream(str(fp)) as ofs:
+            ofs.SetFormat(fmt.oeformat)
+            ofs.Setgz(fmt.gzip)
+
+            for idx, row in self._obj.iterrows():
+                mol = row[primary_molecule_column].CreateCopy()
+
+                if title_column is not None:
+                    mol.SetTitle(str(row[title_column]))
+
+                oechem.OEWriteMolecule(ofs, mol)
+
+    def to_molecule_csv(
+            self,
+            fp: FilePath,
+            *,
+            molecule_format: str | int = "smiles",
+            flavor: int | None = None,
+            gzip: bool = False,
+            b64encode: bool = False,
+            columns: str | Iterable[str] | None = None,
+            index: bool = True,
+            sep: str = ',',
+            na_rep: str = '',
+            float_format: str | None = None,
+            header: bool = True,
+            encoding: str | None = None,
+            lineterminator: str | None = None,
+            date_format: str | None = None,
+            quoting: int | None = None,
+            quotechar: str = '"',
+            doublequote: bool = True,
+            escapechar: str | None = None,
+            decimal: str = '.',
+            index_label: str = "index",
+    ) -> None:
+        """
+        Write to a CSV file with molecules.
+        :param fp: File path
+        :param molecule_format: Molecule file format
+        :param flavor: SMILES flavor
+        :param gzip: Gzip molecule strings
+        :param b64encode: Base64 encode molecule strings
+        :param columns: Columns to include in the output CSV
+        :param index: Whether to write the index
+        :param sep: Field delimiter
+        :param na_rep: Missing data representation
+        :param float_format: Format string for floating point numbers
+        :param header: Write out the column names
+        :param encoding: Encoding to use in the output file
+        :param lineterminator: Newline character
+        :param date_format: Format string for datetime objects
+        :param quoting: Quoting mode
+        :param quotechar: Character used to quote fields
+        :param doublequote: Control quoting of quotechar
+        :param escapechar: Character used to escape sep and quotechar
+        :param decimal: Decimal separator
+        :param index_label: Column label for the index
+        """
+        df_copy = self._obj.copy()
+
+        for col in df_copy.columns:
+            if isinstance(df_copy.dtypes[col], MoleculeDtype):
+                df_copy[col] = df_copy[col].chem.to_molecule_strings(
+                    molecule_format=molecule_format,
+                    flavor=flavor,
+                    gzip=gzip,
+                    b64encode=b64encode
+                )
+
+        df_copy.to_csv(
+            fp,
+            sep=sep,
+            na_rep=na_rep,
+            float_format=float_format,
+            columns=columns,
+            header=header,
+            index=index,
+            index_label=index_label,
+            lineterminator=lineterminator,
+            encoding=encoding,
+            date_format=date_format,
+            doublequote=doublequote,
+            escapechar=escapechar,
+            decimal=decimal
+        )
+
+    def to_oedb(
             self,
             fp: FilePath,
             primary_molecule_column: str | None = None,
@@ -1386,84 +1327,65 @@ class WriteToOEDB:
             index_label: str = "index",
             sample_size: int = 25,
             safe: bool = True
-    ):
+    ) -> None:
         """
-        Write OERecords
+        Write OERecords.
 
-        This will write OEMolRecords if primary_molecule_column is not None. The title_column can be used to
-        optionally add a title to the primary molecule. If include_title is False, then that column will be
-        excluded from the output.
-
+        This will write OEMolRecords if primary_molecule_column is not None.
         :param fp: Path to the record file
+        :param primary_molecule_column: Primary molecule column
+        :param title_column: Optional title column
         :param columns: Optional column(s) to use
         :param index: Write an index field if True
         :param index_label: Name of the index field
-        :param sample_size: Sample size of non-null values if we need to determine a column's type
-        :param safe: Check the type of each value to ensure OEField compatibility before writing
-        :return:
+        :param sample_size: Sample size for determining column types
+        :param safe: Check type compatibility before writing
         """
-        # Validate primary molecule column
         if primary_molecule_column is not None:
             if primary_molecule_column not in self._obj.columns:
                 raise KeyError(f'Primary molecule column {primary_molecule_column} not found in DataFrame')
             if not isinstance(self._obj[primary_molecule_column].dtype, MoleculeDtype):
                 raise TypeError(f'Primary molecule column {primary_molecule_column} is not a MoleculeDtype')
 
-        # Validate title column
         if title_column is not None and title_column not in self._obj.columns:
             raise KeyError(f'Title column {title_column} not found in DataFrame')
 
-        # Get the valid field names
         valid_cols = set(self._obj.columns) if columns is None else set(self._obj.columns).intersection(set(columns))
         if len(valid_cols) == 0 and primary_molecule_column is None:
             raise FileError("No data columns to write to output file")
 
-        # Get the correct ordering of those columns
         cols = [col for col in self._obj.columns if col in valid_cols]
 
-        # Make these fields
-        # We check for field compatibility with field_types as we write the oedb
         fields = {}
         field_types = {}
         for col in cols:
-
-            # Float field
             if isinstance(self._obj.dtypes[col], _FLOAT_TYPES):
                 fields[col] = oechem.OEField(col, oechem.Types.Float)
                 field_types[col] = _FLOAT_TYPES
 
-            # Integer field
             elif isinstance(self._obj.dtypes[col], _INTEGER_TYPES):
                 fields[col] = oechem.OEField(col, oechem.Types.Int)
                 field_types[col] = _INTEGER_TYPES
 
-            # Boolean field
             elif isinstance(self._obj.dtypes[col], _BOOLEAN_TYPES):
                 fields[col] = oechem.OEField(col, oechem.Types.Bool)
                 field_types[col] = _BOOLEAN_TYPES
 
-            # Molecule field
             elif isinstance(self._obj.dtypes[col], MoleculeDtype):
                 fields[col] = oechem.OEField(col, oechem.Types.Chem.Mol)
                 field_types[col] = oechem.OEMolBase
 
-            # Else we need to look closer before we assign a type
             else:
-
-                # Get the predominant type in from non-null values
                 t = predominant_type(self._obj[col], sample_size)
 
-                # String field
                 if issubclass(t, _STRING_TYPES):
                     fields[col] = oechem.OEField(col, oechem.Types.String)
                     field_types[col] = _STRING_TYPES
 
-                # Bytes field
                 elif issubclass(t, _BYTES_TYPES):
                     fields[col] = oechem.OEField(col, oechem.Types.Blob)
                     field_types[col] = _BYTES_TYPES
 
-                # Design unit field
                 elif issubclass(t, oechem.OEDesignUnit):
                     fields[col] = oechem.OEField(col, oechem.Types.Chem.DesignUnit)
                     field_types[col] = oechem.OEDesignUnit
@@ -1472,7 +1394,6 @@ class WriteToOEDB:
                     log.warning("Do not know the OEField type that maps to dtype {} in column {}".format(
                         t.__name__, col))
 
-        # Our record type is based on whether we have a primary molecule
         record_type = oechem.OEMolRecord if primary_molecule_column is not None else oechem.OERecord
 
         ofs = oechem.oeofstream()
@@ -1480,62 +1401,111 @@ class WriteToOEDB:
             raise FileError(f'Could not open {fp} for writing')
 
         for idx, row in self._obj.iterrows():
-            # Create a new record
             record = record_type()
 
-            # If this is an OEMolRecord
             if primary_molecule_column is not None:
                 record.set_mol(row[primary_molecule_column])
 
             for col in cols:
-                f = fields[col]  # Field on record
-                v = row[col]     # Value for field on current row
+                f = fields[col]
+                v = row[col]
 
                 record.add_field(f)
 
-                # If this is not the expected type then do not add it
                 if (not safe) or isinstance(v, field_types[col]):
                     record.set_value(f, v)
 
-            # Write out the record
             oechem.OEWriteRecord(ofs, record)
 
         ofs.close()
 
+    # ------------------------------------------------------------------------------------------------------------------
+    # Design Unit methods
+    # ------------------------------------------------------------------------------------------------------------------
 
-########################################################################################################################
-# Molecule Array: Series Extensions
-########################################################################################################################
+    def as_design_unit(
+            self,
+            columns: str | Iterable[str],
+            *,
+            inplace: bool = False
+    ) -> pd.DataFrame:
+        """
+        Convert column(s) to DesignUnitDtype.
+        :param columns: Column name(s) to convert
+        :param inplace: Modify DataFrame in place
+        :return: DataFrame with converted columns
+        """
+        columns = [columns] if isinstance(columns, str) else list(columns)
 
-@register_series_accessor("copy_molecules")
-class SeriesCopyMoleculeAccessor:
+        for name in columns:
+            if name not in self._obj.columns:
+                raise KeyError(f'Column {name} not found in DataFrame: {", ".join(self._obj.columns)}')
+
+        to_convert = [col for col in columns if not isinstance(self._obj[col].dtype, DesignUnitDtype)]
+
+        if not inplace:
+            df = self._obj
+            if to_convert:
+                df = self._obj.copy()
+        else:
+            df = self._obj
+
+        for col in columns:
+            if not isinstance(df[col].dtype, DesignUnitDtype):
+                df[col] = pd.Series(
+                    df[col].array if hasattr(df[col], "array") else df[col],
+                    index=df.index,
+                    dtype=DesignUnitDtype(),
+                )
+        return df
+
+
+@register_series_accessor("chem")
+class OESeriesAccessor:
+    """
+    Unified accessor for all OpenEye-related Series operations.
+    Access via series.chem.<method>()
+    """
+
     def __init__(self, pandas_obj: pd.Series):
-        if not isinstance(pandas_obj.dtype, MoleculeDtype):
+        self._obj = pandas_obj
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # Molecule methods
+    # ------------------------------------------------------------------------------------------------------------------
+
+    def copy_molecules(self) -> pd.Series:
+        """
+        Create a deep copy of molecules in the series.
+        :return: Series with copied molecules
+        """
+        if not isinstance(self._obj.dtype, MoleculeDtype):
             raise TypeError(
                 "copy_molecules only works on molecule columns (oepandas.MoleculeDtype). If this column has "
-                "molecules, use pd.Series.as_molecule to convert to a molecule column first."
+                "molecules, use series.chem.as_molecule() to convert to a molecule column first."
             )
 
-        self._obj = pandas_obj
-
-    def __call__(self) -> pd.Series:
-        # noinspection PyUnresolvedReferences
         return pd.Series(self._obj.array.deepcopy(), dtype=MoleculeDtype())
 
+    def is_valid(self) -> pd.Series:
+        """
+        Return a boolean series indicating whether each molecule is valid.
+        :return: Boolean series
+        """
+        if not isinstance(self._obj.dtype, MoleculeDtype):
+            raise TypeError(
+                "is_valid only works on molecule columns (oepandas.MoleculeDtype)."
+            )
+        return pd.Series(self._obj.array.valid(), index=self._obj.index)
 
-@register_series_accessor("as_molecule")
-class SeriesAsMoleculeAccessor:
-    def __init__(self, pandas_obj: pd.Series):
-        self._obj = pandas_obj
-
-    def __call__(
+    def as_molecule(
             self,
             *,
             molecule_format: str | int | None = None,
     ) -> pd.Series:
         """
-        Convert a series to molecules
-        :param molecule_format: File format of column to convert to molecules (extension or from oechem.OEFormat)
+        Convert a series to molecules.
+        :param molecule_format: File format of column to convert to molecules
         :return: Series as molecule
         """
         if isinstance(self._obj.dtype, MoleculeDtype):
@@ -1544,25 +1514,18 @@ class SeriesAsMoleculeAccessor:
         arr = _series_to_molecule_array(self._obj)
         return pd.Series(arr, index=self._obj.index, dtype=MoleculeDtype())
 
-
-@register_series_accessor("to_molecule")
-class DataFrameToMoleculeAccessor:
-    """
-    Convert a column to molecules and return a series object
-    """
-
-    def __init__(self, pandas_obj: pd.Series):
-        self._obj = pandas_obj
-
-    def __call__(
+    def to_molecule(
             self,
             *,
             molecule_format: dict[str, str] | dict[str, int] | str | int | None = None,
     ) -> pd.Series:
-        # Default format is SMILES if none is specified
+        """
+        Convert a column to molecules and return a series object.
+        :param molecule_format: File format for parsing
+        :return: Series with molecules
+        """
         molecule_format = molecule_format or oechem.OEFormat_SMI
 
-        # Read the array from a sequence of strings
         # noinspection PyProtectedMember
         arr = MoleculeArray._from_sequence_of_strings(
             self._obj,
@@ -1571,19 +1534,7 @@ class DataFrameToMoleculeAccessor:
 
         return pd.Series(arr, dtype=MoleculeDtype())
 
-
-@register_series_accessor("to_molecule_bytes")
-class SeriesToMoleculeBytesAccessor:
-    def __init__(self, pandas_obj: pd.Series):
-        if not isinstance(pandas_obj.dtype, MoleculeDtype):
-            raise TypeError(
-                "to_molecule_bytes only works on molecule columns (oepandas.MoleculeDtype). If this column has "
-                "molecules, use pd.Series.as_molecule to convert to a molecule column first."
-            )
-
-        self._obj = pandas_obj
-
-    def __call__(
+    def to_molecule_bytes(
             self,
             *,
             molecule_format: str | int = oechem.OEFormat_SMI,
@@ -1591,13 +1542,18 @@ class SeriesToMoleculeBytesAccessor:
             gzip: bool = False,
     ) -> pd.Series:
         """
-        Convert a series to molecule bytes
+        Convert a series to molecule bytes.
         :param molecule_format: Molecule format extension or oechem.OEFormat
-        :param flavor: Flavor for generating SMILES (bitmask from oechem.OESMILESFlag)
+        :param flavor: Flavor for generating SMILES
         :param gzip: Gzip the molecule bytes
-        :return: Series of molecules as SMILES
+        :return: Series of molecules as bytes
         """
-        # noinspection PyUnresolvedReferences
+        if not isinstance(self._obj.dtype, MoleculeDtype):
+            raise TypeError(
+                "to_molecule_bytes only works on molecule columns (oepandas.MoleculeDtype). If this column has "
+                "molecules, use series.chem.as_molecule() to convert to a molecule column first."
+            )
+
         arr = self._obj.array.to_molecule_bytes(
             molecule_format=molecule_format,
             flavor=flavor,
@@ -1606,19 +1562,7 @@ class SeriesToMoleculeBytesAccessor:
 
         return pd.Series(arr, index=self._obj.index, dtype=object)
 
-
-@register_series_accessor("to_molecule_strings")
-class SeriesToMoleculeStringsAccessor:
-    def __init__(self, pandas_obj: pd.Series):
-        if not isinstance(pandas_obj.dtype, MoleculeDtype):
-            raise TypeError(
-                "to_molecule_string only works on molecule columns (oepandas.MoleculeDtype). If this column has "
-                "molecules, use pd.Series.as_molecule to convert to a molecule column first."
-            )
-
-        self._obj = pandas_obj
-
-    def __call__(
+    def to_molecule_strings(
             self,
             *,
             molecule_format: str | int = "smiles",
@@ -1627,14 +1571,19 @@ class SeriesToMoleculeStringsAccessor:
             b64encode: bool = False
     ) -> pd.Series:
         """
-        Convert a series to molecule strings
+        Convert a series to molecule strings.
         :param molecule_format: Molecule format extension or oechem.OEFormat
-        :param flavor: Flavor for generating SMILES (bitmask from oechem.OESMILESFlag)
+        :param flavor: Flavor for generating SMILES
         :param gzip: Gzip the molecule strings (will be base64 encoded)
         :param b64encode: Force base64 encoding for all molecules
-        :return: Series of molecules as SMILES
+        :return: Series of molecules as strings
         """
-        # noinspection PyUnresolvedReferences
+        if not isinstance(self._obj.dtype, MoleculeDtype):
+            raise TypeError(
+                "to_molecule_strings only works on molecule columns (oepandas.MoleculeDtype). If this column has "
+                "molecules, use series.chem.as_molecule() to convert to a molecule column first."
+            )
+
         arr = self._obj.array.to_molecule_strings(
             molecule_format=molecule_format,
             flavor=flavor,
@@ -1644,45 +1593,105 @@ class SeriesToMoleculeStringsAccessor:
 
         return pd.Series(arr, index=self._obj.index, dtype=object)
 
-
-@register_series_accessor("to_smiles")
-class SeriesToSmilesAccessor:
-    def __init__(self, pandas_obj: pd.Series):
-        self._obj = pandas_obj
-
-    def __call__(self, *, flavor: int = oechem.OESMILESFlag_ISOMERIC) -> pd.Series:
+    def to_smiles(self, *, flavor: int = oechem.OESMILESFlag_ISOMERIC) -> pd.Series:
+        """
+        Convert molecules to SMILES strings.
+        :param flavor: SMILES flavor
+        :return: Series of SMILES strings
+        """
         if not isinstance(self._obj.dtype, MoleculeDtype):
             raise TypeError("to_smiles only works on molecule columns")
 
-        arr = self._obj.array.to_smiles(flavor=flavor)  # noqa
+        arr = self._obj.array.to_smiles(flavor=flavor)
         return pd.Series(arr, index=self._obj.index, dtype=object)
 
-
-@register_series_accessor("subsearch")
-class SeriesSubsearchAccessor:
-    def __init__(self, pandas_obj: pd.Series):
-        if not isinstance(pandas_obj.dtype, MoleculeDtype):
-            raise TypeError(
-                "subsearch only works on molecule columns (oepandas.MoleculeDtype). If this column has "
-                "molecules, use pd.Series.as_molecule to convert to a molecule column first."
-            )
-
-        self._obj = pandas_obj
-
-    def __call__(
+    def subsearch(
             self,
             pattern: str | oechem.OESubSearch,
             *,
             adjustH: bool = False  # noqa
-    ):
+    ) -> pd.Series:
         """
-        Perform a substructure search
+        Perform a substructure search.
         :param pattern: SMARTS pattern or OESubSearch object
         :param adjustH: Adjust implicit / explicit hydrogens to match query
-        :return: Series as molecule
+        :return: Boolean series indicating matches
         """
-        # noinspection PyUnresolvedReferences
+        if not isinstance(self._obj.dtype, MoleculeDtype):
+            raise TypeError(
+                "subsearch only works on molecule columns (oepandas.MoleculeDtype). If this column has "
+                "molecules, use series.chem.as_molecule() to convert to a molecule column first."
+            )
+
         return pd.Series(self._obj.array.subsearch(pattern, adjustH=adjustH), dtype=bool)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # Design Unit methods
+    # ------------------------------------------------------------------------------------------------------------------
+
+    def copy_design_units(self) -> pd.Series:
+        """
+        Create a deep copy of design units in the series.
+        :return: Series with copied design units
+        """
+        if not isinstance(self._obj.dtype, DesignUnitDtype):
+            raise TypeError(
+                "copy_design_units only works on design unit columns (oepandas.DesignUnitDtype). If this column has "
+                "design units, use series.chem.as_design_unit() to convert to a design unit column first."
+            )
+
+        return pd.Series(self._obj.array.deepcopy(), dtype=DesignUnitDtype())
+
+    def get_ligands(self, *, clear_titles: bool = False) -> pd.Series:
+        """
+        Get ligands from design units.
+        :param clear_titles: Clear ligand titles
+        :return: Molecule series with ligands
+        """
+        if not isinstance(self._obj.dtype, DesignUnitDtype):
+            raise TypeError(
+                "get_ligands only works on design unit columns (oepandas.DesignUnitDtype). If this column has "
+                "design units, use series.chem.as_design_unit() to convert to a design unit column first."
+            )
+
+        return pd.Series(self._obj.array.get_ligands(clear_titles=clear_titles), dtype=MoleculeDtype())
+
+    def get_proteins(self, *, clear_titles: bool = False) -> pd.Series:
+        """
+        Get proteins from design units.
+        :param clear_titles: Clear protein titles
+        :return: Molecule series with proteins
+        """
+        if not isinstance(self._obj.dtype, DesignUnitDtype):
+            raise TypeError(
+                "get_proteins only works on design unit columns (oepandas.DesignUnitDtype). If this column has "
+                "design units, use series.chem.as_design_unit() to convert to a design unit column first."
+            )
+
+        return pd.Series(self._obj.array.get_proteins(clear_titles=clear_titles), dtype=MoleculeDtype())
+
+    def get_components(self, mask: int) -> pd.Series:
+        """
+        Get components from design units.
+        :param mask: Component mask
+        :return: Molecule series with components
+        """
+        if not isinstance(self._obj.dtype, DesignUnitDtype):
+            raise TypeError(
+                "get_components only works on design unit columns (oepandas.DesignUnitDtype). If this column has "
+                "design units, use series.chem.as_design_unit() to convert to a design unit column first."
+            )
+
+        return pd.Series(self._obj.array.get_components(mask), dtype=MoleculeDtype())
+
+    def as_design_unit(self) -> pd.Series:
+        """
+        Convert a series to design units.
+        :return: Series as design units
+        """
+        # noinspection PyProtectedMember
+        arr = DesignUnitArray._from_sequence(self._obj)
+        return pd.Series(arr, index=self._obj.index, dtype=DesignUnitDtype())
 
 
 ########################################################################################################################
@@ -1692,15 +1701,15 @@ class SeriesSubsearchAccessor:
 def read_oedu(
     filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
     *,
-    design_unit_column_name: str = "Design_Unit",
-    design_unit_title_column_name: str = "Title",
+    design_unit_column: str = "Design_Unit",
+    title_column: str = "Title",
     generic_data: bool = True
 ) -> pd.DataFrame:
     """
     Read an OEDB file into a Pandas DataFrame
     :param filepath_or_buffer: File path or buffer
-    :param design_unit_column_name: Column name for the design units
-    :param design_unit_title_column_name: Column name for the design unit title
+    :param design_unit_column: Column name for the design units
+    :param title_column: Column name for the design unit title
     :param generic_data: Read data from the design unit into columns
     :return: Pandas DataFrame
     """
@@ -1726,151 +1735,10 @@ def read_oedu(
                     continue
 
     return pd.DataFrame({
-        design_unit_column_name: pd.Series(du_array, dtype=DesignUnitDtype()),
-        design_unit_title_column_name: pd.Series([du.GetTitle() for du in du_array], dtype=str),
+        design_unit_column: pd.Series(du_array, dtype=DesignUnitDtype()),
+        title_column: pd.Series([du.GetTitle() for du in du_array], dtype=str),
         **data.to_series_dict()
     })
-
-
-########################################################################################################################
-# Design Unit Array: DataFrame Extensions
-########################################################################################################################
-
-@register_dataframe_accessor("as_design_unit")
-class DataFrameAsDesignUnitAccessor:
-    """
-    Accessor that adds the as_molecule method to a Pandas DataFrame
-    """
-
-    def __init__(self, pandas_obj):
-        self._obj = pandas_obj
-
-    def __call__(
-            self,
-            columns: str | Iterable[str],
-            *,
-            inplace=False
-    ):
-        # Make sure we're working with a list of columns
-        # noinspection DuplicatedCode
-        columns = [columns] if isinstance(columns, str) else list(columns)
-
-        # Validate column names
-        for name in columns:
-            if name not in self._obj.columns:
-                raise KeyError(f'Column {name} not found in DataFrame: {", ".join(self._obj.columns)}')
-
-        to_convert = [col for col in columns if not isinstance(self._obj[col].dtype, DesignUnitDtype)]
-
-        if not inplace:
-            df = self._obj
-            if to_convert:
-                df = self._obj.copy()
-        else:
-            df = self._obj
-
-        for col in columns:
-            if not isinstance(df[col].dtype, DesignUnitDtype):
-                df[col] = pd.Series(
-                    df[col].array if hasattr(df[col], "array") else df[col],
-                    index=df.index,
-                    dtype=DesignUnitDtype(),
-                )
-        return df
-
-########################################################################################################################
-# Design Unit Array: Series Extensions
-########################################################################################################################
-
-@register_series_accessor("copy_design_units")
-class SeriesCopyDesignUnitsAccessor:
-    def __init__(self, pandas_obj: pd.Series):
-        if not isinstance(pandas_obj.dtype, DesignUnitDtype):
-            raise TypeError(
-                "copy_design_units only works on design unit columns (oepandas.DesignUnitDtype). If this column has "
-                "design units, use pd.Series.as_design_unit to convert to a design unit column first."
-            )
-
-        self._obj = pandas_obj
-
-    def __call__(self) -> pd.Series:
-        # noinspection PyUnresolvedReferences
-        return pd.Series(self._obj.array.deepcopy(), dtype=DesignUnitDtype())
-
-
-@register_series_accessor("get_ligands")
-class SeriesGetLigandAccessor:
-    def __init__(self, pandas_obj):
-        if not isinstance(pandas_obj.dtype, DesignUnitDtype):
-            raise TypeError(
-                "get_ligand only works on design unit columns (oepandas.DesignUnitDtype). If this column has "
-                "design units, use pd.Series.as_design_unit to convert to a design unit column first."
-            )
-
-        self._obj = pandas_obj
-
-    def __call__(self, *, clear_titles: bool = False) -> pd.Series:
-        """
-        Get ligands from design units
-        :param clear_titles: Clear ligand titles
-        :return: Molecule series with ligands
-        """
-        return pd.Series(self._obj.array.get_ligands(clear_titles=clear_titles), dtype=MoleculeDtype())
-
-
-@register_series_accessor("get_proteins")
-class SeriesGetProteinAccessor:
-    def __init__(self, pandas_obj):
-        if not isinstance(pandas_obj.dtype, DesignUnitDtype):
-            raise TypeError(
-                "get_protein only works on design unit columns (oepandas.DesignUnitDtype). If this column has "
-                "design units, use pd.Series.as_design_unit to convert to a design unit column first."
-            )
-
-        self._obj = pandas_obj
-
-    def __call__(self, *, clear_titles: bool = False):
-        """
-        Get ligands from design units
-        :param clear_titles: Clear protein titles
-        :return: Molecule series with ligands
-        """
-        return pd.Series(self._obj.array.get_proteins(clear_titles=clear_titles), dtype=MoleculeDtype())
-
-
-@register_series_accessor("get_components")
-class SeriesGetProteinAccessor:
-    def __init__(self, pandas_obj):
-        if not isinstance(pandas_obj.dtype, DesignUnitDtype):
-            raise TypeError(
-                "get_components only works on design unit columns (oepandas.DesignUnitDtype). If this column has "
-                "design units, use pd.Series.as_design_unit to convert to a design unit column first."
-            )
-
-        self._obj = pandas_obj
-
-    def __call__(self, mask: int):
-        """
-        Get ligands from design units
-        :param mask: Component mask
-        :return: Molecule series with ligands
-        """
-        return pd.Series(self._obj.array.get_components(mask), dtype=MoleculeDtype())
-
-
-@register_series_accessor("as_design_unit")
-class SeriesAsDesignUnitAccessor:
-    def __init__(self, pandas_obj):
-        self._obj = pandas_obj
-
-    def __call__(self) -> pd.Series:
-        """
-        Convert a series to design units
-        :return: Series as design units
-        """
-        # noinspection PyProtectedMember
-        arr = DesignUnitArray._from_sequence(self._obj)
-        return pd.Series(arr, index=self._obj.index, dtype=DesignUnitDtype())
 
 
 ########################################################################################################################

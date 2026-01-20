@@ -53,7 +53,7 @@ def test_get_ligand(test_design_units):
     Get ligand from design unit
     """
     df = pd.DataFrame({"Design_Unit": pd.Series(copy_test_design_units(test_design_units), dtype=DesignUnitDtype())})
-    df["Ligand"] = df["Design_Unit"].get_ligands()
+    df["Ligand"] = df["Design_Unit"].chem.get_ligands()
     df["Ligand_SMILES"] = df.Ligand.apply(oechem.OEMolToSmiles)
 
     expected = [
@@ -69,7 +69,7 @@ def test_get_protein(test_design_units):
     Get protein from design unit
     """
     df = pd.DataFrame({"Design_Unit": pd.Series(copy_test_design_units(test_design_units), dtype=DesignUnitDtype())})
-    df["Protein"] = df["Design_Unit"].get_proteins()
+    df["Protein"] = df["Design_Unit"].chem.get_proteins()
     df["Num_Protein_Atoms"] = df.Protein.apply(lambda mol: mol.NumAtoms())
 
     expected = [12979, 12961]
@@ -84,7 +84,7 @@ def test_series_as_design_unit(test_design_units):
     df = pd.DataFrame({"Design_Unit": pd.Series(copy_test_design_units(test_design_units), dtype=object)})
 
     # Convert to design unit
-    df["Design_Unit"] = df.Design_Unit.as_design_unit()
+    df["Design_Unit"] = df.Design_Unit.chem.as_design_unit()
     assert isinstance(df.dtypes["Design_Unit"], DesignUnitDtype)
 
 def test_dataframe_as_design_unit(test_design_units):
@@ -95,6 +95,6 @@ def test_dataframe_as_design_unit(test_design_units):
     df = pd.DataFrame({"Design_Unit": pd.Series(copy_test_design_units(test_design_units), dtype=object)})
 
     # Convert to design unit
-    df.as_design_unit(columns=["Design_Unit"], inplace=True)
+    df.chem.as_design_unit(columns=["Design_Unit"], inplace=True)
     assert isinstance(df.dtypes["Design_Unit"], DesignUnitDtype)
 
