@@ -54,8 +54,10 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
 
             else:
                 raise TypeError(
-                    "Cannot create {} containing object of type {} at index {}. All elements must derive from {} or be None/NaN.".format(
-                        type(self).__name__, type(obj).__name__, len(self._objs), self._base_openeye_type.__name__
+                    "Cannot create {} containing object of type {} at index {}. "
+                    "All elements must derive from {} or be None/NaN.".format(
+                        type(self).__name__, type(obj).__name__, len(self._objs),
+                        self._base_openeye_type.__name__
                     )
                 )
 
@@ -155,7 +157,11 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
                 else:
                     filled.append(obj.CreateCopy() if copy else obj)
             else:
-                raise TypeError(f'{type(self).__name__} cannot determine if object of type {type(obj).__name__} is NaN. Only {self._base_openeye_type.__name__} or None values are supported.')
+                raise TypeError(
+                    f'{type(self).__name__} cannot determine if object of type '
+                    f'{type(obj).__name__} is NaN. Only {self._base_openeye_type.__name__} '
+                    f'or None values are supported.'
+                )
 
         return self.__class__(filled, metadata=shallow_copy(self.metadata))
 
@@ -167,12 +173,16 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         non_missing = []
 
         for obj in self._objs:
-            if not pd.isna(obj):
+            if obj is not None:
                 if isinstance(obj, self._base_openeye_type):
                     if obj.IsValid():
                         non_missing.append(obj)
                 else:
-                    raise TypeError(f'{type(self).__name__} cannot determine if object of type {type(obj).__name__} is NaN. Only {self._base_openeye_type.__name__} or None values are supported.')
+                    raise TypeError(
+                        f'{type(self).__name__} cannot determine if object of type '
+                        f'{type(obj).__name__} is NaN. Only {self._base_openeye_type.__name__} '
+                        f'or None values are supported.'
+                    )
 
         return self.__class__(non_missing, metadata=shallow_copy(self.metadata))
 
@@ -228,6 +238,7 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
     @classmethod
     def _from_factorized(cls, values, original):
         # Optimized: Use list comprehension for better performance
+        # noinspection PyProtectedMember
         objs = [None if idx == -1 else original._objs[idx] for idx in values]
         return cls(objs, metadata=shallow_copy(original.metadata))
 
@@ -256,6 +267,7 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         def _is_valid(obj):
             if obj is None:
                 return False
+            # noinspection PyBroadException
             try:
                 return bool(obj.IsValid())
             except Exception:
@@ -307,13 +319,13 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         if isinstance(other, OEExtensionArray):
             if len(self) != len(other):
                 return np.zeros(len(self), dtype=bool)
-            return np.frompyfunc(lambda a, b: a is b, 2, 1)(self._objs, other._objs).astype(bool)
+            return np.array([a is b for a, b in zip(self._objs, other._objs)], dtype=bool)
 
         elif isinstance(other, Iterable):
             other_list = list(other)
             if len(self) != len(other_list):
                 return np.zeros(len(self), dtype=bool)
-            return np.frompyfunc(lambda a, b: a is b, 2, 1)(self._objs, other_list).astype(bool)
+            return np.array([a is b for a, b in zip(self._objs, other_list)], dtype=bool)
 
         else:
             raise TypeError(f'Cannot compare non-equality of {type(self).__name__} and {type(other).__name__}')
@@ -330,7 +342,7 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
     def __ge__(self, other: Sized) -> bool:
         return len(self) >= len(other)
 
-    def __add__(self, other: Iterable[T | None] | T | None | 'OEExtensionArray[T]') -> Self:
+    def __add__(self, other: 'Iterable[T | None] | T | None | OEExtensionArray[T]') -> Self:
         """
         Create a shallow copy of this extension array with added element(s)
         :param other: Value(s) to add
@@ -345,11 +357,13 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
 
         return new_obj
 
-    def __sub__(self, other: Iterable[T | None] | T | None | 'OEExtensionArray[T]') -> Self:
+    def __sub__(self, other: 'Iterable[T | None] | T | None | OEExtensionArray[T]') -> Self:
         raise NotImplemented(f'Subtraction not implemented for {type(self).__name__}')
 
     def __contains__(self, item: object) -> bool:
-        if pd.isna(item):
+        # Check for NA values (None, np.nan, pd.NA, etc.)
+        is_na = item is None or item is pd.NA or (isinstance(item, float) and np.isnan(item))
+        if is_na:
             return any(obj is None for obj in self._objs)
         return any(obj is item for obj in self._objs)
 
@@ -363,7 +377,8 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         :return:
         """
         # Handle NaN values consistently with constructor
-        if pd.isna(value):
+        is_na = value is None or value is pd.NA or (isinstance(value, float) and np.isnan(value))
+        if is_na:
             self._objs[index] = None
         else:
             self._objs[index] = value

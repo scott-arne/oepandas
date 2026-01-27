@@ -1,4 +1,5 @@
 import logging
+import base64
 import numpy as np
 import pandas as pd
 from openeye import oechem
@@ -30,7 +31,7 @@ def _has_data_and_is_not_blank(mol: oechem.OEMolBase, tag: str) -> bool:
     Check if a molecue has data (SD or generic) and that it is not blank/None
     :param mol: Molecule
     :param tag: Data tag
-    :return: True if the molecule has that data tag and it is not blank/None
+    :return: True if the molecule has that data tag, and it is not blank/None
     """
     # noinspection PyBroadException
     try:
@@ -267,8 +268,14 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
         for i, s in enumerate(strings):  # type: int, str
             mol = oechem.OEMol()
 
-            if not (isinstance(s, str) and molecule_from_string(mol, s.strip(), molecule_format)):
-                log.warning("Could not convert molecule %d from '%s': %s", i + 1, molecule_format.name, s)
+            if isinstance(s, str):
+
+                # If we need to base64 decode
+                if b64decode:
+                    s = base64.b64decode(s).decode('utf-8')
+
+                if not molecule_from_string(mol, s.strip(), molecule_format):
+                    log.warning("Could not convert molecule %d from '%s': %s", i + 1, molecule_format.name, s)
 
             mols.append(mol)
 

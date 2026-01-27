@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from openeye import oechem, oegrid
-from typing import Literal, Protocol, TypedDict
+from typing import Literal, Protocol, TypedDict, cast
 from collections.abc import Iterable
 from pandas.api.types import is_numeric_dtype, is_float, is_integer
 from pandas.core.dtypes.dtypes import PandasExtensionDtype
@@ -1058,7 +1058,7 @@ class OEDataFrameAccessor:
         mask = np.ones(len(self._obj), dtype=bool)
         for col in cols:
             if isinstance(self._obj[col].dtype, MoleculeDtype):
-                mask &= self._obj[col].array.valid()
+                mask &= cast(MoleculeArray, self._obj[col].array).valid()
 
         if inplace:
             self._obj.drop(self._obj[~mask].index, inplace=True)
@@ -1174,6 +1174,9 @@ class OEDataFrameAccessor:
                 if title_column is not None:
                     primary_mol.SetTitle(str(row[title_column]))
 
+                if index:
+                    oechem.OESetSDData(primary_mol, index_tag, str(idx))
+
                 for col in columns:
                     if col in secondary_molecule_cols:
                         oechem.OESetSDData(
@@ -1232,6 +1235,8 @@ class OEDataFrameAccessor:
         with oechem.oemolostream(str(fp)) as ofs:
             ofs.SetFormat(fmt.oeformat)
             ofs.Setgz(fmt.gzip)
+            if flavor is not None:
+                ofs.SetFlavor(fmt.oeformat, flavor)
 
             for idx, row in self._obj.iterrows():
                 mol = row[primary_molecule_column].CreateCopy()
@@ -1311,6 +1316,8 @@ class OEDataFrameAccessor:
             lineterminator=lineterminator,
             encoding=encoding,
             date_format=date_format,
+            quoting=quoting,
+            quotechar=quotechar,
             doublequote=doublequote,
             escapechar=escapechar,
             decimal=decimal
@@ -1396,6 +1403,8 @@ class OEDataFrameAccessor:
 
         record_type = oechem.OEMolRecord if primary_molecule_column is not None else oechem.OERecord
 
+        index_field = oechem.OEField(index_label, oechem.Types.String) if index else None
+
         ofs = oechem.oeofstream()
         if not ofs.open(str(fp)):
             raise FileError(f'Could not open {fp} for writing')
@@ -1405,6 +1414,10 @@ class OEDataFrameAccessor:
 
             if primary_molecule_column is not None:
                 record.set_mol(row[primary_molecule_column])
+
+            if index and index_field is not None:
+                record.add_field(index_field)
+                record.set_value(index_field, str(idx))
 
             for col in cols:
                 f = fields[col]
@@ -1471,6 +1484,38 @@ class OESeriesAccessor:
         self._obj = pandas_obj
 
     # ------------------------------------------------------------------------------------------------------------------
+    # Metadata access
+    # ------------------------------------------------------------------------------------------------------------------
+
+    @property
+    def metadata(self) -> dict:
+        """
+        Access metadata dictionary for this molecule/design unit series.
+
+        Metadata is stored per-Series and can be used to attach arbitrary
+        data (such as rendering callbacks, highlight patterns, etc.) to
+        molecule Series.
+
+        :return: A mutable dictionary for storing metadata
+
+        Example::
+
+            s = df["mol"]  # molecule Series
+            s.chem.metadata["highlight"] = "c1ccccc1"
+            s.chem.metadata["highlight"]  # returns 'c1ccccc1'
+
+        Note: This property provides unified access to the underlying array's
+        metadata. For MoleculeDtype and DesignUnitDtype Series, this delegates
+        to the array's metadata attribute.
+        """
+        arr = self._obj.array
+        if hasattr(arr, 'metadata'):
+            return cast(dict, arr.metadata)  # noqa
+        raise AttributeError(
+            f"Series with dtype {self._obj.dtype} does not support metadata"
+        )
+
+    # ------------------------------------------------------------------------------------------------------------------
     # Molecule methods
     # ------------------------------------------------------------------------------------------------------------------
 
@@ -1485,7 +1530,7 @@ class OESeriesAccessor:
                 "molecules, use series.chem.as_molecule() to convert to a molecule column first."
             )
 
-        return pd.Series(self._obj.array.deepcopy(), dtype=MoleculeDtype())
+        return pd.Series(cast(MoleculeArray, self._obj.array).deepcopy(), dtype=MoleculeDtype())
 
     def is_valid(self) -> pd.Series:
         """
@@ -1496,7 +1541,7 @@ class OESeriesAccessor:
             raise TypeError(
                 "is_valid only works on molecule columns (oepandas.MoleculeDtype)."
             )
-        return pd.Series(self._obj.array.valid(), index=self._obj.index)
+        return pd.Series(cast(MoleculeArray, self._obj.array).valid(), index=self._obj.index)
 
     def as_molecule(
             self,
@@ -1511,7 +1556,8 @@ class OESeriesAccessor:
         if isinstance(self._obj.dtype, MoleculeDtype):
             return self._obj
 
-        arr = _series_to_molecule_array(self._obj)
+        fmt = get_oeformat(molecule_format or oechem.OEFormat_SMI, gzip=False).oeformat
+        arr = _series_to_molecule_array(self._obj, molecule_format=fmt)
         return pd.Series(arr, index=self._obj.index, dtype=MoleculeDtype())
 
     def to_molecule(
@@ -1554,7 +1600,7 @@ class OESeriesAccessor:
                 "molecules, use series.chem.as_molecule() to convert to a molecule column first."
             )
 
-        arr = self._obj.array.to_molecule_bytes(
+        arr = cast(MoleculeArray, self._obj.array).to_molecule_bytes(
             molecule_format=molecule_format,
             flavor=flavor,
             gzip=gzip
@@ -1584,7 +1630,7 @@ class OESeriesAccessor:
                 "molecules, use series.chem.as_molecule() to convert to a molecule column first."
             )
 
-        arr = self._obj.array.to_molecule_strings(
+        arr = cast(MoleculeArray, self._obj.array).to_molecule_strings(
             molecule_format=molecule_format,
             flavor=flavor,
             gzip=gzip,
@@ -1602,7 +1648,7 @@ class OESeriesAccessor:
         if not isinstance(self._obj.dtype, MoleculeDtype):
             raise TypeError("to_smiles only works on molecule columns")
 
-        arr = self._obj.array.to_smiles(flavor=flavor)
+        arr = cast(MoleculeArray, self._obj.array).to_smiles(flavor=flavor)
         return pd.Series(arr, index=self._obj.index, dtype=object)
 
     def subsearch(
@@ -1623,7 +1669,7 @@ class OESeriesAccessor:
                 "molecules, use series.chem.as_molecule() to convert to a molecule column first."
             )
 
-        return pd.Series(self._obj.array.subsearch(pattern, adjustH=adjustH), dtype=bool)
+        return pd.Series(cast(MoleculeArray, self._obj.array).subsearch(pattern, adjustH=adjustH), dtype=bool)
 
     # ------------------------------------------------------------------------------------------------------------------
     # Design Unit methods
@@ -1640,7 +1686,7 @@ class OESeriesAccessor:
                 "design units, use series.chem.as_design_unit() to convert to a design unit column first."
             )
 
-        return pd.Series(self._obj.array.deepcopy(), dtype=DesignUnitDtype())
+        return pd.Series(cast(DesignUnitArray, self._obj.array).deepcopy(), dtype=DesignUnitDtype())
 
     def get_ligands(self, *, clear_titles: bool = False) -> pd.Series:
         """
@@ -1654,7 +1700,8 @@ class OESeriesAccessor:
                 "design units, use series.chem.as_design_unit() to convert to a design unit column first."
             )
 
-        return pd.Series(self._obj.array.get_ligands(clear_titles=clear_titles), dtype=MoleculeDtype())
+        arr = cast(DesignUnitArray, self._obj.array).get_ligands(clear_titles=clear_titles)
+        return pd.Series(arr, dtype=MoleculeDtype())
 
     def get_proteins(self, *, clear_titles: bool = False) -> pd.Series:
         """
@@ -1668,7 +1715,8 @@ class OESeriesAccessor:
                 "design units, use series.chem.as_design_unit() to convert to a design unit column first."
             )
 
-        return pd.Series(self._obj.array.get_proteins(clear_titles=clear_titles), dtype=MoleculeDtype())
+        arr = cast(DesignUnitArray, self._obj.array).get_proteins(clear_titles=clear_titles)
+        return pd.Series(arr, dtype=MoleculeDtype())
 
     def get_components(self, mask: int) -> pd.Series:
         """
@@ -1682,7 +1730,7 @@ class OESeriesAccessor:
                 "design units, use series.chem.as_design_unit() to convert to a design unit column first."
             )
 
-        return pd.Series(self._obj.array.get_components(mask), dtype=MoleculeDtype())
+        return pd.Series(cast(DesignUnitArray, self._obj.array).get_components(mask), dtype=MoleculeDtype())
 
     def as_design_unit(self) -> pd.Series:
         """

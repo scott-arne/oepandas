@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 from openeye import oedepict
+from typing import ClassVar
 from collections.abc import Iterable
 from pandas.core.dtypes.dtypes import PandasExtensionDtype
 from pandas.api.extensions import register_extension_dtype
@@ -50,6 +51,7 @@ class DisplayArray(OEExtensionArray[oedepict.OE2DMolDisplay]):
     def dtype(self) -> PandasExtensionDtype:
         return DisplayDtype()
 
+    # noinspection PyUnusedLocal
     @classmethod
     def _from_sequence(
             cls,
@@ -70,7 +72,8 @@ class DisplayArray(OEExtensionArray[oedepict.OE2DMolDisplay]):
         for i, obj in enumerate(scalars):
 
             # Nones are OK
-            if obj is None or pd.isna(obj):
+            is_na = obj is None or obj is pd.NA or (isinstance(obj, float) and np.isnan(obj))
+            if is_na:
                 displays.append(None)
 
             # Design units
@@ -111,9 +114,9 @@ class DisplayDtype(PandasExtensionDtype):
     OpenEye molecule datatype for Pandas
     """
 
-    type: type = oedepict.OE2DMolDisplay
-    name: str = "display"
-    kind: str = "O"
+    type: ClassVar[type] = oedepict.OE2DMolDisplay
+    name: ClassVar[str] = "display"
+    kind: ClassVar[str] = "O"
     base = np.dtype("O")
 
     @property

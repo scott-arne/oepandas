@@ -2,6 +2,7 @@
 Tests for pandas_extensions.py module
 """
 
+import csv
 import pytest
 import pandas as pd
 import numpy as np
@@ -262,6 +263,147 @@ class TestFileWriters:
             assert output_path.exists()
             assert output_path.stat().st_size > 0
 
+    def test_dataframe_to_sdf_with_index(self, test_molecules):
+        """Test that to_sdf writes the index as an SD tag when index=True"""
+        df = pd.DataFrame({
+            "Molecule": oepd.MoleculeArray(test_molecules),
+            "Name": ["ethanol", "propane", "methane", "ethane"]
+        }, index=["a", "b", "c", "d"])
+
+        with TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "test_output_index.sdf"
+            df.chem.to_sdf(str(output_path), "Molecule", index=True, index_tag="my_index")
+            assert output_path.exists()
+
+            # Read back and verify index is written as SD tag
+            # Note: OEGraphMol preserves SD data better than OEMol
+            ifs = oechem.oemolistream(str(output_path))
+            mol = oechem.OEGraphMol()
+            oechem.OEReadMolecule(ifs, mol)
+            index_value = oechem.OEGetSDData(mol, "my_index")
+            assert index_value == "a"
+            ifs.close()
+
+    def test_dataframe_to_sdf_without_index(self, test_molecules):
+        """Test that to_sdf does not write index when index=False"""
+        df = pd.DataFrame({
+            "Molecule": oepd.MoleculeArray(test_molecules),
+            "Name": ["ethanol", "propane", "methane", "ethane"]
+        }, index=["a", "b", "c", "d"])
+
+        with TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "test_output_no_index.sdf"
+            df.chem.to_sdf(str(output_path), "Molecule", index=False)
+            assert output_path.exists()
+
+            # Read back and verify index is NOT written as SD tag
+            # Note: OEGraphMol preserves SD data better than OEMol
+            ifs = oechem.oemolistream(str(output_path))
+            mol = oechem.OEGraphMol()
+            oechem.OEReadMolecule(ifs, mol)
+            assert not oechem.OEHasSDData(mol, "index")
+            ifs.close()
+
+    def test_dataframe_to_smi_with_flavor(self, test_molecules):
+        """Test that to_smi applies the flavor parameter"""
+        df = pd.DataFrame({
+            "Molecule": oepd.MoleculeArray(test_molecules),
+        })
+
+        with TemporaryDirectory() as temp_dir:
+            # Write with default flavor (canonical)
+            output_default = Path(temp_dir) / "test_default.smi"
+            df.chem.to_smi(str(output_default), "Molecule")
+            assert output_default.exists()
+
+            # Write with isomeric flavor
+            output_isomeric = Path(temp_dir) / "test_isomeric.smi"
+            df.chem.to_smi(str(output_isomeric), "Molecule", flavor=oechem.OESMILESFlag_ISOMERIC)
+            assert output_isomeric.exists()
+
+    def test_dataframe_to_molecule_csv_with_quoting(self, test_molecules):
+        """Test that to_molecule_csv passes quoting and quotechar parameters"""
+        df = pd.DataFrame({
+            "Molecule": oepd.MoleculeArray(test_molecules),
+            "Name": ["eth,anol", "prop;ane", "meth\"ane", "eth'ane"]
+        })
+
+        with TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "test_quoting.csv"
+            df.chem.to_molecule_csv(
+                str(output_path),
+                molecule_format="smiles",
+                quoting=csv.QUOTE_ALL,
+                quotechar='"',
+                index=False
+            )
+            assert output_path.exists()
+
+            # Read back and verify quoting was applied
+            with open(output_path, 'r') as f:
+                content = f.read()
+                # With QUOTE_ALL, all fields should be quoted
+                assert '"Molecule"' in content or 'Molecule' in content
+
+    def test_dataframe_to_oedb_with_index(self, test_molecules):
+        """Test that to_oedb writes the index when index=True"""
+        df = pd.DataFrame({
+            "Molecule": oepd.MoleculeArray(test_molecules),
+            "Name": ["ethanol", "propane", "methane", "ethane"]
+        }, index=["idx_a", "idx_b", "idx_c", "idx_d"])
+
+        with TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "test_index.oeb"
+            df.chem.to_oedb(
+                str(output_path),
+                primary_molecule_column="Molecule",
+                index=True,
+                index_label="row_index"
+            )
+            assert output_path.exists()
+
+            # Read back and verify index was written
+            ifs = oechem.oeifstream()
+            assert ifs.open(str(output_path))
+
+            # Get the first record using OEReadRecords iterator
+            record = next(iter(oechem.OEReadRecords(ifs)))
+
+            # Check for the index field
+            index_field = oechem.OEField("row_index", oechem.Types.String)
+            assert record.has_field(index_field)
+            index_value = record.get_value(index_field)
+            assert index_value == "idx_a"
+            ifs.close()
+
+    def test_dataframe_to_oedb_without_index(self, test_molecules):
+        """Test that to_oedb does not write index when index=False"""
+        df = pd.DataFrame({
+            "Molecule": oepd.MoleculeArray(test_molecules),
+            "Name": ["ethanol", "propane", "methane", "ethane"]
+        }, index=["idx_a", "idx_b", "idx_c", "idx_d"])
+
+        with TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "test_no_index.oeb"
+            df.chem.to_oedb(
+                str(output_path),
+                primary_molecule_column="Molecule",
+                index=False
+            )
+            assert output_path.exists()
+
+            # Read back and verify index was NOT written
+            ifs = oechem.oeifstream()
+            assert ifs.open(str(output_path))
+
+            # Get the first record using OEReadRecords iterator
+            record = next(iter(oechem.OEReadRecords(ifs)))
+
+            # Check that the index field does not exist
+            index_field = oechem.OEField("index", oechem.Types.String)
+            assert not record.has_field(index_field)
+            ifs.close()
+
 
 class TestPandasAccessors:
     """Test pandas series/dataframe accessors"""
@@ -276,6 +418,39 @@ class TestPandasAccessors:
         # Test copy_molecules accessor via oe namespace
         copied = series.chem.copy_molecules()
         assert len(copied) == len(test_molecules)
+
+    def test_series_as_molecule_with_format(self):
+        """Test that as_molecule uses the molecule_format parameter"""
+        # Create a series of SMILES strings
+        smiles_series = pd.Series(["CCO", "CCC", "C", "CC"])
+
+        # Convert to molecules using default format (SMILES)
+        mol_series = smiles_series.chem.as_molecule(molecule_format="smi")
+
+        assert isinstance(mol_series.dtype, oepd.MoleculeDtype)
+        assert len(mol_series) == 4
+        # Verify molecules are valid
+        for mol in mol_series:
+            assert mol is not None
+            assert isinstance(mol, oechem.OEMolBase)
+
+    def test_series_as_molecule_with_int_format(self):
+        """Test that as_molecule works with integer format codes"""
+        smiles_series = pd.Series(["CCO", "CCC"])
+
+        mol_series = smiles_series.chem.as_molecule(molecule_format=oechem.OEFormat_SMI)
+
+        assert isinstance(mol_series.dtype, oepd.MoleculeDtype)
+        assert len(mol_series) == 2
+
+    def test_series_as_molecule_already_molecule(self, test_molecules):
+        """Test that as_molecule returns the same series if already MoleculeDtype"""
+        mol_series = pd.Series(oepd.MoleculeArray(test_molecules), dtype=oepd.MoleculeDtype())
+
+        result = mol_series.chem.as_molecule(molecule_format="smiles")
+
+        # Should return the same series since it's already a molecule series
+        assert result is mol_series
 
 
 class TestErrorHandling:

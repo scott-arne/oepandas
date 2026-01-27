@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from openeye import oechem
-from typing import Any, Generator, Self
+from typing import Any, ClassVar, Generator, Self
 from collections.abc import Iterable, Sequence
 from pandas.core.dtypes.dtypes import PandasExtensionDtype
 from pandas.api.extensions import register_extension_dtype
@@ -68,6 +68,7 @@ class DesignUnitArray(OEExtensionArray[oechem.OEDesignUnit]):
 
         super().__init__(design_units, copy=copy, metadata=metadata)
 
+    # noinspection PyUnusedLocal
     @classmethod
     def _from_sequence(
             cls,
@@ -114,6 +115,7 @@ class DesignUnitArray(OEExtensionArray[oechem.OEDesignUnit]):
 
         return cls(design_units, copy=copy)
 
+    # noinspection PyUnusedLocal
     @classmethod
     def _from_sequence_of_strings(
             cls,
@@ -231,9 +233,9 @@ class DesignUnitDtype(PandasExtensionDtype):
     OpenEye design unit datatype for Pandas
     """
 
-    type: type = oechem.OEDesignUnit
-    name: str = "design_unit"
-    kind: str = "O"
+    type: ClassVar[type] = oechem.OEDesignUnit
+    name: ClassVar[str] = "design_unit"
+    kind: ClassVar[str] = "O"
     base = np.dtype("O")
     isbuiltin = 0
     isnative = 0
