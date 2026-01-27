@@ -537,6 +537,12 @@ df.chem.to_oedb(
 
 Access these methods via `series.chem.<method>()`:
 
+#### Properties
+
+| Property | Returns | Description |
+|----------|---------|-------------|
+| `metadata` | `dict` | Access metadata dictionary for attaching arbitrary data to a series |
+
 #### Molecule Methods
 
 | Method | Returns | Description |

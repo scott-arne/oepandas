@@ -36,7 +36,8 @@ class Series(pd.Series[Any]):
     ) -> np.ndarray: ...
     
     def to_smiles(self, flavor: Optional[int] = None) -> np.ndarray: ...
-    
+
+    # noinspection PyPep8Naming
     def subsearch(
         self, 
         pattern: Union[str, oechem.OESubSearch], 

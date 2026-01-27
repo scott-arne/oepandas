@@ -167,6 +167,31 @@ def test_series_is_valid():
     validity = df.MOL.chem.is_valid()
     assert validity.tolist() == [True, False, True]
 
+def test_series_chem_metadata():
+    """Test .chem.metadata accessor property for API parity with OEPolars"""
+    x = MoleculeArray.read_smi(Path(ASSETS, "10.smi"))
+    df = pd.DataFrame([
+        {"Title": x[0].GetTitle(), "MOL": x[0]},
+        {"Title": x[1].GetTitle(), "MOL": x[1]},
+    ])
+    df["MOL"] = df.MOL.astype(MoleculeDtype())
+
+    # Test that metadata is accessible via .chem accessor
+    assert isinstance(df.MOL.chem.metadata, dict)
+
+    # Test that metadata can be set and retrieved
+    df.MOL.chem.metadata["highlight"] = "c1ccccc1"
+    assert df.MOL.chem.metadata["highlight"] == "c1ccccc1"
+
+    # Test that .chem.metadata is the same dict as .array.metadata
+    assert df.MOL.chem.metadata is df.MOL.array.metadata
+
+    # Test isolation between series
+    df2 = pd.DataFrame([{"MOL": x[0]}])
+    df2["MOL"] = df2.MOL.astype(MoleculeDtype())
+    df2.MOL.chem.metadata["key"] = "different_value"
+    assert df.MOL.chem.metadata.get("key") is None  # Original series unaffected
+
 @pytest.mark.skipif(os.environ.get("OEPANDAS_TEST_LONG", "FALSE").upper() != "TRUE", reason="Skipping long tests")
 def test_regression_as_molecule_formatter_axis_error():
     """
