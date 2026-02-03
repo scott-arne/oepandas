@@ -4,7 +4,7 @@ import pandas as pd
 from pathlib import Path
 from openeye import oechem, oegrid
 from typing import Literal, Protocol, TypedDict, cast
-from collections.abc import Iterable
+from collections.abc import Hashable, Iterable, Sequence
 from pandas.api.types import is_numeric_dtype, is_float, is_integer
 from pandas.core.dtypes.dtypes import PandasExtensionDtype
 from pandas.api.extensions import register_dataframe_accessor, register_series_accessor
@@ -342,7 +342,8 @@ class MoleculeArrayReaderProtocol(Protocol):
             self,
             fp: FilePath,
             flavor: int | None,
-            conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"]
+            conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"],
+            no_title: bool
     ) -> MoleculeArray: ...
 
 
@@ -365,7 +366,8 @@ def _read_molecules_to_dataframe(
     combine_tags: Literal["prefix", "prefer_sd", "prefer_generic"] = "prefix",
     conf_index_column_name: str = "ConfIdx",
     sd_prefix: str = "SD Tag: ",
-    generic_prefix: str = "Generic Tag: "
+    generic_prefix: str = "Generic Tag: ",
+    no_title: bool = False
 ) -> pd.DataFrame:
     """
     Read a molecule file with SD data and/or generic data
@@ -385,11 +387,15 @@ def _read_molecules_to_dataframe(
     :param combine_tags: Strategy for combining identical SD and generic data tags
     :param sd_prefix: Prefix for SD data with corresponding generic data columns (for combine_tags='prefix')
     :param generic_prefix: Prefix for generic data with corresponding SD data columns (for combine_tags='prefix')
+    :param no_title: Do not include any title information
     :return: Pandas DataFrame
     """
     # Read the molecules themselves
     if not isinstance(filepath_or_buffer, (str, Path)):
         raise NotImplementedError("Reading from buffers is not yet supported for raed_oeb")
+
+    if no_title:
+        title_column = None
 
     # --------------------------------------------------
     # Preprocess usecols and numeric
@@ -416,7 +422,7 @@ def _read_molecules_to_dataframe(
     # --------------------------------------------------
 
     # Read the molecules into a molecule array
-    mols = reader(filepath_or_buffer, flavor=flavor, conformer_test=conformer_test)
+    mols = reader(filepath_or_buffer, flavor=flavor, conformer_test=conformer_test, no_title=no_title)
 
     # Our initial dataframe is built from the molecules themselves
     if expand_confs:
@@ -676,7 +682,8 @@ def read_sdf(
     usecols: None | str | Iterable[str] = None,
     numeric: None | str | dict[str, Literal["integer", "signed", "unsigned", "float"] | None] | Iterable[str] = None,
     conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default",
-    read_sd_data: bool = True
+    read_sd_data: bool = True,
+    no_title: bool = False
 ) -> pd.DataFrame:
     """
     Read structures from an SD file into a DataFrame.
@@ -712,6 +719,7 @@ def read_sdf(
     :param numeric: Data column(s) to make numeric
     :param conformer_test: Combine single conformer molecules into multiconformer
     :param read_sd_data: Read SD data
+    :param no_title: Do not read any title information
     :return: Pandas DataFrame
     """
     return _read_molecules_to_dataframe(
@@ -726,7 +734,8 @@ def read_sdf(
         sd_data=read_sd_data,
         usecols=usecols,
         numeric_columns=numeric,
-        conformer_test=conformer_test
+        conformer_test=conformer_test,
+        no_title=no_title
     )
 
 
@@ -745,7 +754,8 @@ def read_oeb(
     conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default",
     combine_tags: Literal["prefix", "prefer_sd", "prefer_generic"] = "prefix",
     sd_prefix: str = "SD Tag: ",
-    generic_prefix: str = "Generic Tag: "
+    generic_prefix: str = "Generic Tag: ",
+    no_title: bool = False
 ) -> pd.DataFrame:
     """
     Read structures OpenEye binary molecule files.
@@ -785,6 +795,7 @@ def read_oeb(
     :param combine_tags: Strategy for combining identical SD and generic data tags
     :param sd_prefix: Prefix for SD data with corresponding generic data columns (for combine_tags='prefix')
     :param generic_prefix: Prefix for generic data with corresponding SD data columns (for combine_tags='prefix')
+    :param no_title: If True, do not include title in the dataframe
     :return: Pandas DataFrame
     """
     return _read_molecules_to_dataframe(
@@ -802,7 +813,8 @@ def read_oeb(
         conformer_test=conformer_test,
         combine_tags=combine_tags,
         sd_prefix=sd_prefix,
-        generic_prefix=generic_prefix
+        generic_prefix=generic_prefix,
+        no_title=no_title
     )
 
 
@@ -1254,21 +1266,21 @@ class OEDataFrameAccessor:
             flavor: int | None = None,
             gzip: bool = False,
             b64encode: bool = False,
-            columns: str | Iterable[str] | None = None,
+            columns: Sequence[Hashable] | None = None,
             index: bool = True,
             sep: str = ',',
             na_rep: str = '',
             float_format: str | None = None,
-            header: bool = True,
+            header: bool | Sequence[str] = True,
             encoding: str | None = None,
             lineterminator: str | None = None,
             date_format: str | None = None,
-            quoting: int | None = None,
+            quoting: Literal[0, 1, 2, 3, 4, 5] | None = None,
             quotechar: str = '"',
             doublequote: bool = True,
             escapechar: str | None = None,
             decimal: str = '.',
-            index_label: str = "index",
+            index_label: Literal[False] | str | Sequence[Hashable] | None = "index",
     ) -> None:
         """
         Write to a CSV file with molecules.

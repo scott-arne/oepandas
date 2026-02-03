@@ -51,7 +51,8 @@ def _read_molecules(
         *,
         flavor: Optional[int] = None,
         conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default",
-        gzip: bool = False
+        gzip: bool = False,
+        no_title: bool = False
 ) -> Generator[oechem.OEMolBase, None, None]:
     """
     Generator over flavored reading of molecules in a specific file format
@@ -76,6 +77,7 @@ def _read_molecules(
     :param flavor: Optional flavor (oechem.OEIFlavor)
     :param conformer_test: OpenEye conformer testing method
     :param gzip: File is gzipped
+    :param no_title: Remove titles
     :return: Generator over molecules
     """
     fmt = get_oeformat(file_format, gzip=gzip or is_gz(fp))
@@ -116,6 +118,9 @@ def _read_molecules(
         ifs.Setgz(fmt.gzip)
 
         for mol in ifs.GetOEMols():
+            if no_title:
+                mol.SetTitle("")
+                mol.GetActive().SetTitle("")
             yield oechem.OEMol(mol)
 
 
@@ -152,27 +157,19 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
 
         for mol in mols:
 
-            # None values are ok
-            if pd.isna(mol):
-                processed.append(None)
+            # Molecules
+            if isinstance(mol, oechem.OEMolBase):
 
-            # Never store OEGraphMol under the hood (for consistency)
-            elif isinstance(mol, oechem.OEGraphMol):
-                processed.append(oechem.OEMol(mol))
-
-            # Else if we are copying
-            elif deepcopy:
-
-                if isinstance(mol, oechem.OEMolBase):
+                # Always store molecules as OEMol under-the-hood
+                if deepcopy or isinstance(mol, oechem.OEGraphMol):
                     processed.append(oechem.OEMol(mol))
 
                 else:
-                    # This would be an error
-                    processed.append(None)
+                    processed.append(mol)
 
-            # Else we are just using references
+            # Anything else is invalid
             else:
-                processed.append(mol)
+                processed.append(None)
 
         # Superclass initialization
         super().__init__(processed, copy=copy, metadata=metadata)
@@ -354,19 +351,22 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
             cls,
             fp: FilePath,
             flavor: int | None = None,
+            no_title: bool = False,
             **_
     ) -> Self:
         """
         Read molecules from an SMILES file and return an array
         :param fp: Path to the SMILES file
         :param flavor: OpenEye input flavor
+        :param no_title: If true, do not include title
         :return: Molecule array populated by the molecules in the file
         """
         return cls(
             _read_molecules(
                 fp,
                 oechem.OEFormat_SMI,
-                flavor=flavor
+                flavor=flavor,
+                no_title=no_title
             )
         )
 
@@ -375,7 +375,8 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
             cls,
             fp: FilePath,
             flavor: int | None = None,
-            conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default"
+            conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default",
+            no_title: bool = False
     ) -> Self:
         """
         Read molecules from an SD file and return an array
@@ -398,6 +399,7 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
         :param fp: Path to the SD file
         :param flavor: OpenEye input flavor
         :param conformer_test: Conformer testing
+        :param no_title: If true, do not include title
         :return: Molecule array populated by the molecules in the file
         """
         return cls(
@@ -405,7 +407,8 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
                 fp,
                 oechem.OEFormat_SDF,
                 flavor=flavor,
-                conformer_test=conformer_test
+                conformer_test=conformer_test,
+                no_title=no_title
             )
         )
 
@@ -414,7 +417,8 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
             cls,
             fp: FilePath,
             flavor: int | None = None,
-            conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default"
+            conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default",
+            no_title: bool = False
     ) -> Self:
         """
         Read molecules from an OEB file and return an array
@@ -437,6 +441,7 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
         :param fp: Path to the OEB file
         :param flavor: OpenEye input flavor
         :param conformer_test: Conformer testing
+        :param no_title: If true, do not include title
         :return: Molecule array populated by the molecules in the file
         """
         return cls(
@@ -444,7 +449,8 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
                 fp,
                 oechem.OEFormat_OEB,
                 flavor=flavor,
-                conformer_test=conformer_test
+                conformer_test=conformer_test,
+                no_title=no_title
             )
         )
 
