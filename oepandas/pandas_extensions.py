@@ -21,7 +21,7 @@ from .util import (
     create_molecule_to_string_writer,
     predominant_type
 )
-from .arrays import MoleculeArray, MoleculeDtype, DesignUnitArray, DesignUnitDtype
+from .arrays import MoleculeArray, MoleculeDtype, DesignUnitArray, DesignUnitDtype, FingerprintArray, FingerprintDtype
 # noinspection PyProtectedMember
 from .arrays.molecule import _read_molecules
 from .exception import FileError
@@ -1682,6 +1682,96 @@ class OESeriesAccessor:
             )
 
         return pd.Series(cast(MoleculeArray, self._obj.array).subsearch(pattern, adjustH=adjustH), dtype=bool)
+
+    def create_fingerprints(
+            self,
+            fptype: str,
+            num_bits: int,
+            min_distance: int,
+            max_distance: int,
+            atom_type: str | int,
+            bond_type: str | int,
+            *,
+            desalt: bool = True,
+            quiet: bool = True
+    ) -> FingerprintArray:
+        """
+        Generate fingerprints from molecules in this series.
+
+        :param fptype: OpenEye fingerprint type (path, tree, circular, lingo, maccs).
+        :param num_bits: Number of bits in the fingerprint.
+        :param min_distance: Minimum distance (path, tree) or radius (circular).
+        :param max_distance: Maximum distance (path, tree) or radius (circular).
+        :param atom_type: "|" separated OEFPAtomType members or bitmask.
+        :param bond_type: "|" separated OEFPBondType members or bitmask.
+        :param desalt: Remove salts by keeping only the largest component.
+        :param quiet: Silence the progress bar.
+        :returns: FingerprintArray containing the generated fingerprints.
+        """
+        if not isinstance(self._obj.dtype, MoleculeDtype):
+            raise TypeError(
+                "create_fingerprints only works on molecule columns (oepandas.MoleculeDtype). If this column has "
+                "molecules, use series.chem.as_molecule() to convert to a molecule column first."
+            )
+
+        return FingerprintArray.from_molecules(
+            cast(MoleculeArray, self._obj.array),
+            fptype=fptype,
+            num_bits=num_bits,
+            min_distance=min_distance,
+            max_distance=max_distance,
+            atom_type=atom_type,
+            bond_type=bond_type,
+            desalt=desalt,
+            quiet=quiet
+        )
+
+    def create_numpy_fingerprints(
+            self,
+            fptype: str,
+            num_bits: int,
+            min_distance: int,
+            max_distance: int,
+            atom_type: str | int,
+            bond_type: str | int,
+            *,
+            desalt: bool = True,
+            quiet: bool = True
+    ) -> pd.Series:
+        """
+        Generate numpy fingerprints from molecules in this series.
+
+        :param fptype: OpenEye fingerprint type (path, tree, circular, lingo, maccs).
+        :param num_bits: Number of bits in the fingerprint.
+        :param min_distance: Minimum distance (path, tree) or radius (circular).
+        :param max_distance: Maximum distance (path, tree) or radius (circular).
+        :param atom_type: "|" separated OEFPAtomType members or bitmask.
+        :param bond_type: "|" separated OEFPBondType members or bitmask.
+        :param desalt: Remove salts by keeping only the largest component.
+        :param quiet: Silence the progress bar.
+        :returns: Series of numpy boolean arrays (one per molecule).
+        """
+        if not isinstance(self._obj.dtype, MoleculeDtype):
+            raise TypeError(
+                "create_numpy_fingerprints only works on molecule columns (oepandas.MoleculeDtype). If this column has "
+                "molecules, use series.chem.as_molecule() to convert to a molecule column first."
+            )
+
+        from .arrays.fingerprint import make_numpy_fingerprints
+
+        fps = make_numpy_fingerprints(
+            cast(MoleculeArray, self._obj.array),
+            fptype=fptype,
+            num_bits=num_bits,
+            min_distance=min_distance,
+            max_distance=max_distance,
+            atom_type=atom_type,
+            bond_type=bond_type,
+            desalt=desalt,
+            quiet=quiet
+        )
+
+        return pd.Series(fps, index=self._obj.index, dtype=object)
 
     # ------------------------------------------------------------------------------------------------------------------
     # Design Unit methods

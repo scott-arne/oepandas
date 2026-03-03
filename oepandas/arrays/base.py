@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from copy import copy as shallow_copy
 from itertools import chain
-from openeye import oechem, oedepict
+from openeye import oechem, oedepict, oegraphsim
 from abc import ABCMeta
 from typing import Generic, TypeVar, Any, Callable, Self
 from collections.abc import Sized, Iterable, Sequence, Iterator
@@ -22,7 +22,7 @@ NotSet = object()
 # Base ExtensionArray definition for OpenEye objects
 ########################################################################################################################
 
-T = TypeVar('T', bound=oechem.OEMolBase | oechem.OEDesignUnit | oedepict.OE2DMolDisplay)
+T = TypeVar('T', bound=oechem.OEMolBase | oechem.OEDesignUnit | oedepict.OE2DMolDisplay | oegraphsim.OEFingerPrint)
 
 
 class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
@@ -46,7 +46,7 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
 
         for obj in objs:
 
-            if pd.isna(obj):
+            if pd.isna(obj) or obj == '':
                 self._objs.append(None)
 
             elif isinstance(obj, self._base_openeye_type):

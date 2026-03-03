@@ -155,7 +155,7 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
         # Under the hood we only work with oechem.OEMol for consistency
         processed = []
 
-        for mol in mols:
+        for i, mol in enumerate(mols):
 
             # Molecules
             if isinstance(mol, oechem.OEMolBase):
@@ -167,9 +167,16 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
                 else:
                     processed.append(mol)
 
+            # None/NaN values are allowed
+            elif pd.isna(mol):
+                processed.append(None)
+
             # Anything else is invalid
             else:
-                processed.append(None)
+                raise TypeError(
+                    f"Cannot create MoleculeArray containing object of type {type(mol).__name__} "
+                    f"at index {i}. All elements must be OEMolBase or None/NaN."
+                )
 
         # Superclass initialization
         super().__init__(processed, copy=copy, metadata=metadata)
@@ -588,6 +595,46 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
         s1 = self.to_smiles(flavor=flavor)
         s2 = other.to_smiles(flavor=flavor)
         return s1 == s2
+
+    def to_fingerprints(
+            self,
+            fptype: str,
+            num_bits: int,
+            min_distance: int,
+            max_distance: int,
+            atom_type: str | int,
+            bond_type: str | int,
+            desalt: bool = True,
+            quiet: bool = True
+    ):
+        """
+        Generate fingerprints from molecules in this array.
+
+        :param fptype: OpenEye fingerprint type (path, tree, circular, lingo, maccs).
+        :param num_bits: Number of bits in the fingerprint.
+        :param min_distance: Minimum distance (path, tree) or radius (circular).
+        :param max_distance: Maximum distance (path, tree) or radius (circular).
+        :param atom_type: "|" separated OEFPAtomType members or bitmask.
+        :param bond_type: "|" separated OEFPBondType members or bitmask.
+        :param desalt: Remove salts by keeping only the largest component.
+        :param quiet: Silence the progress bar.
+        :returns: FingerprintArray containing the generated fingerprints.
+        """
+        # Late import to avoid circular dependency
+        from .fingerprint import FingerprintArray
+
+        return FingerprintArray.from_molecules(
+            self,
+            fptype=fptype,
+            num_bits=num_bits,
+            min_distance=min_distance,
+            max_distance=max_distance,
+            atom_type=atom_type,
+            bond_type=bond_type,
+            desalt=desalt,
+            quiet=quiet
+        )
+
 
 @register_extension_dtype
 class MoleculeDtype(PandasExtensionDtype):
