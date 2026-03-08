@@ -1683,6 +1683,35 @@ class OESeriesAccessor:
 
         return pd.Series(cast(MoleculeArray, self._obj.array).subsearch(pattern, adjustH=adjustH), dtype=bool)
 
+    def substructure_search(
+        self,
+        pattern: str | oechem.OESubSearch,
+        *,
+        adjustH: bool = False  # noqa
+    ):
+        """
+        Perform a substructure search.
+        :param pattern: SMARTS pattern or OESubSearch object
+        :param adjustH: Adjust implicit / explicit hydrogens to match query
+        :return: Boolean series indicating matches
+        """
+        return self.subsearch(pattern, adjustH=adjustH)
+
+    def substructure_filter(
+        self,
+        pattern: str | oechem.OESubSearch,
+        *,
+        adjustH: bool = False  # noqa
+    ):
+        """
+        Filter out molecules matching a substructure (inverse of substructure_search).
+
+        :param pattern: SMARTS pattern or OESubSearch object
+        :param adjustH: Adjust implicit / explicit hydrogens to match query
+        :return: Boolean series indicating non-matches
+        """
+        return ~self.subsearch(pattern, adjustH=adjustH)
+
     def create_fingerprints(
             self,
             fptype: str,
