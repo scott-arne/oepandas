@@ -49,8 +49,14 @@ OpenEye Toolkits requires a commercial license. However, **free licenses are ava
 
 ### Install from PyPI
 
+**New:** Enable experimental support for ``.mae / .maegz / .mae.gz`` files with 
+[oepandas-mae](https://github.com/scott-arne/oepandas-mae). Currently, for Mac / Linux only.
+
 ```bash
 pip install oepandas
+
+# Enable experimental Maestro file format support
+pip install oepandas[mae]
 ```
 
 ### Development Installation

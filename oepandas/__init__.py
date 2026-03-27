@@ -10,7 +10,7 @@ from .pandas_extensions import (
 )
 from .exception import FileError, UnsupportedFileFormat
 
-__version__ = '3.2.1'
+__version__ = '3.2.2'
 
 __all__ = [
     "exception",
@@ -72,3 +72,9 @@ ch.setFormatter(LevelSpecificFormatter())
 log.addHandler(ch)
 
 log.setLevel(logging.INFO)
+
+# ---- Optional plugin auto-discovery ----
+try:
+    import oepandas_mae  # noqa: F401
+except ImportError:
+    pass

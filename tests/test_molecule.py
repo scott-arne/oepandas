@@ -701,6 +701,34 @@ def test_series_substructure_filter():
     combined = pd.concat([matches, filtered]).sort_index()
     assert combined.index.equals(df.index)
 
+def test_dataframe_substructure_search():
+    """
+    DataFrame accessor substructure_search returns rows matching a substructure
+    """
+    df = oepd.read_sdf(Path(ASSETS, "10.sdf"))
+    result = df.chem.substructure_search("Molecule", "S(=O)=O")
+    assert len(result) == 1
+    assert result.iloc[0].Title == 'Omeprazole'
+
+def test_dataframe_substructure_filter():
+    """
+    DataFrame accessor substructure_filter returns rows not matching a substructure
+    """
+    df = oepd.read_sdf(Path(ASSETS, "10.sdf"))
+    matches = df.chem.substructure_search("Molecule", "S(=O)=O")
+    filtered = df.chem.substructure_filter("Molecule", "S(=O)=O")
+
+    # Filter should return everything that search does not
+    assert len(filtered) == len(df) - len(matches)
+    assert len(filtered) == 9
+
+    # No overlap between the two sets
+    assert matches.index.intersection(filtered.index).empty
+
+    # Together they should reconstruct the full dataframe
+    combined = pd.concat([matches, filtered]).sort_index()
+    assert combined.index.equals(df.index)
+
 def test_detect_molecule_columns():
     """
     Detect molecule columns in a Pandas DataFrame

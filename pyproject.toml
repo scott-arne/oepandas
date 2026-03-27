@@ -62,6 +62,7 @@ classifiers = [
 # https://packaging.python.org/en/latest/specifications/dependency-specifiers/#extras
 [project.optional-dependencies]
 dev = ["invoke", "build", "pytest"]
+mae = ["oepandas-mae>=0.1.0"]
 
 # ----------------------------------------------------------------------------------------
 # These configurations are specific to the `setuptools` build backend

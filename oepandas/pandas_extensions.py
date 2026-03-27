@@ -4,7 +4,7 @@ import pandas as pd
 from pathlib import Path
 from openeye import oechem, oegrid
 from typing import Literal, Protocol, TypedDict, cast
-from collections.abc import Hashable, Iterable, Sequence
+from collections.abc import Callable, Hashable, Iterable
 from pandas.api.types import is_numeric_dtype, is_float, is_integer
 from pandas.core.dtypes.dtypes import PandasExtensionDtype
 from pandas.api.extensions import register_dataframe_accessor, register_series_accessor
@@ -21,7 +21,7 @@ from .util import (
     create_molecule_to_string_writer,
     predominant_type
 )
-from .arrays import MoleculeArray, MoleculeDtype, DesignUnitArray, DesignUnitDtype, FingerprintArray, FingerprintDtype
+from .arrays import MoleculeArray, MoleculeDtype, DesignUnitArray, DesignUnitDtype, FingerprintArray
 # noinspection PyProtectedMember
 from .arrays.molecule import _read_molecules
 from .exception import FileError
@@ -1082,6 +1082,46 @@ class OEDataFrameAccessor:
         df = self._obj.copy()
         return df.drop(df[~mask].index)
 
+    def substructure_search(
+            self,
+            column: str,
+            pattern: str | oechem.OESubSearch,
+            *,
+            adjustH: bool = False  # noqa
+    ) -> pd.DataFrame:
+        """
+        Filter rows to those where molecules match a substructure pattern.
+
+        :param column: Name of the molecule column to search
+        :param pattern: SMARTS pattern or OESubSearch object
+        :param adjustH: Adjust implicit / explicit hydrogens to match query
+        :returns: DataFrame with rows that match the substructure
+        """
+        if column not in self._obj.columns:
+            raise KeyError(f'Column {column} not found in DataFrame')
+        # noinspection PyUnresolvedReferences
+        return self._obj[self._obj[column].chem.subsearch(pattern, adjustH=adjustH)]
+
+    def substructure_filter(
+            self,
+            column: str,
+            pattern: str | oechem.OESubSearch,
+            *,
+            adjustH: bool = False  # noqa
+    ) -> pd.DataFrame:
+        """
+        Filter out rows where molecules match a substructure pattern.
+
+        :param column: Name of the molecule column to search
+        :param pattern: SMARTS pattern or OESubSearch object
+        :param adjustH: Adjust implicit / explicit hydrogens to match query
+        :returns: DataFrame with rows that do not match the substructure
+        """
+        if column not in self._obj.columns:
+            raise KeyError(f'Column {column} not found in DataFrame')
+        # noinspection PyUnresolvedReferences
+        return self._obj[~self._obj[column].chem.subsearch(pattern, adjustH=adjustH)]
+
     def detect_molecule_columns(self, *, sample_size: int = 25) -> None:
         """
         Detects molecule columns based on their predominant type and convert them to MoleculeDtype.
@@ -1266,21 +1306,21 @@ class OEDataFrameAccessor:
             flavor: int | None = None,
             gzip: bool = False,
             b64encode: bool = False,
-            columns: Sequence[Hashable] | None = None,
+            columns: list[Hashable] | None = None,
             index: bool = True,
             sep: str = ',',
             na_rep: str = '',
-            float_format: str | None = None,
-            header: bool | Sequence[str] = True,
+            float_format: str | Callable[[object], str] | None = None,
+            header: bool | list[str] = True,
             encoding: str | None = None,
             lineterminator: str | None = None,
             date_format: str | None = None,
-            quoting: Literal[0, 1, 2, 3, 4, 5] | None = None,
+            quoting: Literal[0, 1, 2, 3, 4, 5] = 0,
             quotechar: str = '"',
             doublequote: bool = True,
             escapechar: str | None = None,
             decimal: str = '.',
-            index_label: Literal[False] | str | Sequence[Hashable] | None = "index",
+            index_label: Literal[False] | str | list[Hashable] | None = "index",
     ) -> None:
         """
         Write to a CSV file with molecules.

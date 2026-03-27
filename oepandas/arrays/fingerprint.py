@@ -302,7 +302,7 @@ def make_numpy_fingerprints(
         bond_type: str | int,
         desalt: bool = True,
         quiet: bool = True
-    ) -> Iterable[np.ndarray | None]:
+    ) -> list[np.ndarray | None]:
     """
     Convenience function to make a list of Numpy fingerprints from an interable of molecules
     :param data: Iterable of OpenEye molecules
