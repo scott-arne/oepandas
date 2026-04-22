@@ -1,17 +1,19 @@
-import sys
 import logging
-import numpy as np
-import pandas as pd
+import sys
+from abc import ABCMeta
+from collections.abc import Callable, Iterable, Iterator, Sequence, Sized
 from copy import copy as shallow_copy
 from itertools import chain
+from typing import Any, Generic, Self, TypeVar
+
+import numpy as np
+import pandas as pd
 from openeye import oechem, oedepict, oegraphsim
-from abc import ABCMeta
-from typing import Generic, TypeVar, Any, Callable, Self
-from collections.abc import Sized, Iterable, Sequence, Iterator
+
+# noinspection PyProtectedMember
+from pandas._typing import ArrayLike, FillnaOptions, Shape, TakeIndexer
 from pandas.api.extensions import ExtensionArray
 from pandas.core.algorithms import take as pandas_take
-# noinspection PyProtectedMember
-from pandas._typing import Shape, TakeIndexer, ArrayLike, FillnaOptions
 
 log = logging.getLogger("oepandas")
 
@@ -42,7 +44,7 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         :param copy: Whether to copy the objects to this extension array
         """
         self._objs = []
-        self.metadata = metadata if isinstance(metadata, dict) else {}
+        self.metadata: dict = metadata if isinstance(metadata, dict) else {}
 
         for obj in objs:
 
@@ -54,11 +56,8 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
 
             else:
                 raise TypeError(
-                    "Cannot create {} containing object of type {} at index {}. "
-                    "All elements must derive from {} or be None/NaN.".format(
-                        type(self).__name__, type(obj).__name__, len(self._objs),
-                        self._base_openeye_type.__name__
-                    )
+                    f"Cannot create {type(self).__name__} containing object of type {type(obj).__name__} at index {len(self._objs)}. "
+                    f"All elements must derive from {self._base_openeye_type.__name__} or be None/NaN."
                 )
 
     def append(self, item: T | None) -> None:
@@ -319,13 +318,13 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         if isinstance(other, OEExtensionArray):
             if len(self) != len(other):
                 return np.zeros(len(self), dtype=bool)
-            return np.array([a is b for a, b in zip(self._objs, other._objs)], dtype=bool)
+            return np.array([a is b for a, b in zip(self._objs, other._objs, strict=False)], dtype=bool)
 
         elif isinstance(other, Iterable):
             other_list = list(other)
             if len(self) != len(other_list):
                 return np.zeros(len(self), dtype=bool)
-            return np.array([a is b for a, b in zip(self._objs, other_list)], dtype=bool)
+            return np.array([a is b for a, b in zip(self._objs, other_list, strict=False)], dtype=bool)
 
         else:
             raise TypeError(f'Cannot compare non-equality of {type(self).__name__} and {type(other).__name__}')
@@ -358,7 +357,7 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         return new_obj
 
     def __sub__(self, other: 'Iterable[T | None] | T | None | OEExtensionArray[T]') -> Self:
-        raise NotImplemented(f'Subtraction not implemented for {type(self).__name__}')
+        raise NotImplementedError(f'Subtraction not implemented for {type(self).__name__}')
 
     def __contains__(self, item: object) -> bool:
         # Check for NA values (None, np.nan, pd.NA, etc.)

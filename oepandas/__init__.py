@@ -1,16 +1,11 @@
+import contextlib
 import logging
-from .arrays import DesignUnitArray, DesignUnitDtype, MoleculeArray, MoleculeDtype, DisplayDtype, DisplayArray
-from .pandas_extensions import (
-    read_sdf,
-    read_smi,
-    read_oedb,
-    read_molecule_csv,
-    read_oeb,
-    read_oedu
-)
-from .exception import FileError, UnsupportedFileFormat
 
-__version__ = '3.2.2'
+from .arrays import DesignUnitArray, DesignUnitDtype, DisplayArray, DisplayDtype, MoleculeArray, MoleculeDtype
+from .exception import FileError, UnsupportedFileFormat
+from .pandas_extensions import read_molecule_csv, read_oeb, read_oedb, read_oedu, read_sdf, read_smi
+
+__version__ = '3.2.3'
 
 __all__ = [
     "exception",
@@ -21,6 +16,8 @@ __all__ = [
     "MoleculeArray",
     "DisplayDtype",
     "DisplayArray",
+    "FileError",
+    "UnsupportedFileFormat",
     "read_sdf",
     "read_oeb",
     "read_smi",
@@ -74,7 +71,5 @@ log.addHandler(ch)
 log.setLevel(logging.INFO)
 
 # ---- Optional plugin auto-discovery ----
-try:
+with contextlib.suppress(ImportError):
     import oepandas_mae  # noqa: F401
-except ImportError:
-    pass

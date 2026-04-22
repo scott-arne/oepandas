@@ -1,13 +1,9 @@
-import os
-import pytest
-import base64 as b64
-import pandas as pd
-import numpy as np
-import oepandas as oepd
-from tempfile import TemporaryDirectory
-from oepandas import DisplayArray, DisplayDtype
 from pathlib import Path
+
+import pytest
 from openeye import oechem, oedepict
+
+from oepandas import DisplayArray
 
 ASSETS = Path(Path(__file__).parent, "assets")
 

@@ -1,12 +1,15 @@
+from collections.abc import Iterable
+from typing import ClassVar
+
 import numpy as np
 import pandas as pd
 from openeye import oedepict
-from typing import ClassVar
-from collections.abc import Iterable
-from pandas.core.dtypes.dtypes import PandasExtensionDtype
-from pandas.api.extensions import register_extension_dtype
+
 # noinspection PyProtectedMember
 from pandas._typing import Dtype
+from pandas.api.extensions import register_extension_dtype
+from pandas.core.dtypes.dtypes import PandasExtensionDtype
+
 from .base import OEExtensionArray
 
 
@@ -40,9 +43,7 @@ class DisplayArray(OEExtensionArray[oedepict.OE2DMolDisplay]):
 
             else:
                 raise TypeError(
-                    "Cannot create {} containing object of type {}. All elements must derive from {}.".format(
-                        type(self).__name__, type(obj).__name__, self._base_openeye_type.__name__
-                    )
+                    f"Cannot create {type(self).__name__} containing object of type {type(obj).__name__}. All elements must derive from {self._base_openeye_type.__name__}."
                 )
 
         super().__init__(objs=displays, copy=False, metadata=metadata)
@@ -69,7 +70,7 @@ class DisplayArray(OEExtensionArray[oedepict.OE2DMolDisplay]):
         """
         displays = []
 
-        for i, obj in enumerate(scalars):
+        for obj in scalars:
 
             # Nones are OK
             is_na = obj is None or obj is pd.NA or (isinstance(obj, float) and np.isnan(obj))
@@ -93,7 +94,7 @@ class DisplayArray(OEExtensionArray[oedepict.OE2DMolDisplay]):
         :return: Deep copy of object
         """
         from copy import copy as shallow_copy
-        
+
         if isinstance(metadata, bool) and metadata:
             metadata = shallow_copy(self.metadata)
 
@@ -140,7 +141,7 @@ class DisplayDtype(PandasExtensionDtype):
             return cls()
         raise TypeError(f"Cannot construct a '{cls}' from '{string}'")
 
-    @classmethod  
+    @classmethod
     def _is_dtype(cls, dtype) -> bool:
         """
         Check if dtype is an instance of this dtype

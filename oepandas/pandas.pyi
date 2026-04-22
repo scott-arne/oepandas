@@ -1,10 +1,11 @@
 # Type stubs for pandas extensions
 # This file tells PyCharm about dynamically added accessor methods
 
-from typing import Optional, Union, List, Any
-import pandas as pd
-import numpy as np
 from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pandas as pd
 from openeye import oechem
 
 # Monkey patch pandas classes with type hints for our accessors
@@ -13,37 +14,46 @@ module = pd
 class Series(pd.Series[Any]):
     # Molecule-related accessors
     def copy_molecules(self) -> pd.Series: ...
-    
+
     def as_molecule(
-        self, 
-        *, 
-        molecule_format: Optional[Union[str, int]] = None
+        self,
+        *,
+        molecule_format: str | int | None = None
     ) -> pd.Series: ...
-    
+
     def to_molecule_strings(
         self,
-        molecule_format: Union[str, int] = "smiles",
-        flavor: Optional[int] = None,
+        molecule_format: str | int = "smiles",
+        flavor: int | None = None,
         gzip: bool = False,
         b64encode: bool = False
     ) -> np.ndarray: ...
-    
+
     def to_molecule_bytes(
         self,
-        molecule_format: Union[str, int] = ...,
-        flavor: Optional[int] = None,
+        molecule_format: str | int = ...,
+        flavor: int | None = None,
         gzip: bool = False
     ) -> np.ndarray: ...
-    
-    def to_smiles(self, flavor: Optional[int] = None) -> np.ndarray: ...
+
+    def to_smiles(self, flavor: int | None = None) -> np.ndarray: ...
 
     # noinspection PyPep8Naming
-    def subsearch(
-        self, 
-        pattern: Union[str, oechem.OESubSearch], 
+    def substructure_search(
+        self,
+        pattern: str | oechem.OESubSearch,
+        *,
         adjustH: bool = False
-    ) -> np.ndarray: ...
-    
+    ) -> pd.Series: ...
+
+    # noinspection PyPep8Naming
+    def substructure_filter(
+        self,
+        pattern: str | oechem.OESubSearch,
+        *,
+        adjustH: bool = False
+    ) -> pd.Series: ...
+
     # Design Unit-related accessors
     def copy_design_units(self) -> pd.Series: ...
     def get_ligands(self) -> pd.Series: ...
@@ -54,56 +64,74 @@ class Series(pd.Series[Any]):
 class DataFrame(pd.DataFrame):
     def as_molecule(
         self,
-        columns: Union[str, List[str]],
+        columns: str | list[str],
         *,
         inplace: bool = False,
-        molecule_format: Optional[Union[str, int]] = None,
-    ) -> Optional[pd.DataFrame]: ...
-    
+        molecule_format: str | int | None = None,
+    ) -> pd.DataFrame | None: ...
+
     def filter_invalid_molecules(
         self,
-        columns: Union[str, List[str]]
+        columns: str | list[str]
     ) -> pd.DataFrame: ...
-    
+
     def detect_molecule_columns(
         self,
         *,
         inplace: bool = False
-    ) -> Optional[pd.DataFrame]: ...
-    
+    ) -> pd.DataFrame | None: ...
+
     def to_sdf(
         self,
-        path: Union[str, Path],
+        path: str | Path,
         *,
         molecule_column: str = "Molecule",
-        flavor: Optional[int] = None,
+        flavor: int | None = None,
         conformer_test: str = "default",
-        exclude_columns: Optional[List[str]] = None
+        exclude_columns: list[str] | None = None
     ) -> None: ...
-    
+
     def to_smi(
         self,
-        path: Union[str, Path],
+        path: str | Path,
         *,
         molecule_column: str = "Molecule",
-        flavor: Optional[int] = None
+        flavor: int | None = None
     ) -> None: ...
-    
+
     def to_molecule_csv(
         self,
-        path: Union[str, Path],
+        path: str | Path,
         *,
-        molecule_columns: Optional[Union[str, List[str]]] = None,
-        molecule_format: Union[str, int] = "smiles",
-        flavor: Optional[int] = None,
+        molecule_columns: str | list[str] | None = None,
+        molecule_format: str | int = "smiles",
+        flavor: int | None = None,
         gzip: bool = False,
         b64encode: bool = False,
         **kwargs: Any
     ) -> None: ...
-    
+
     def as_design_unit(
         self,
-        columns: Union[str, List[str]],
+        columns: str | list[str],
         *,
         inplace: bool = False
-    ) -> Optional[pd.DataFrame]: ...
+    ) -> pd.DataFrame | None: ...
+
+    # noinspection PyPep8Naming
+    def substructure_search(
+        self,
+        column: str,
+        pattern: str | oechem.OESubSearch,
+        *,
+        adjustH: bool = False
+    ) -> pd.DataFrame: ...
+
+    # noinspection PyPep8Naming
+    def substructure_filter(
+        self,
+        column: str,
+        pattern: str | oechem.OESubSearch,
+        *,
+        adjustH: bool = False
+    ) -> pd.DataFrame: ...

@@ -97,3 +97,62 @@ filterwarnings = [
     "ignore:builtin type Swig.*:DeprecationWarning",
     "ignore:builtin type swig.*:DeprecationWarning",
 ]
+
+
+# ----------------------------------------------------------------------------------------
+# Ruff configuration (linting and formatting)
+# https://docs.astral.sh/ruff/configuration/
+# ----------------------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "W",    # pycodestyle warnings
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+]
+ignore = [
+    "E501",   # Line too long (handled by formatter)
+    "B008",   # Function call in default argument
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["oepandas"]
+
+
+# ----------------------------------------------------------------------------------------
+# MyPy configuration (type checking)
+# https://mypy.readthedocs.io/en/stable/config_file.html
+# ----------------------------------------------------------------------------------------
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_ignores = true
+ignore_missing_imports = true
+exclude = ["tests/", "build/", "dist/"]
+
+# The OpenEye bindings lack type information and the pandas extension-array
+# interface requires overrides that intentionally diverge from the base class.
+# Relax checks that primarily flag those integration surfaces so mypy can still
+# catch real bugs in our own code without drowning in false positives.
+disable_error_code = [
+    "attr-defined",
+    "arg-type",
+    "assignment",
+    "no-any-return",
+    "override",
+    "union-attr",
+    "valid-type",
+    "misc",
+    "no-redef",
+    "var-annotated",
+    "name-match",
+    "return-value",
+]

@@ -1,13 +1,15 @@
 import base64
-import logging
 import base64 as b64
 import gzip as python_gzip
-import pandas as pd
-from pathlib import Path
+import logging
 from collections import Counter
-from typing import Callable
-from openeye import oechem
+from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
+
+import pandas as pd
+from openeye import oechem
+
 from .exception import UnsupportedFileFormat
 
 log = logging.getLogger("oepandas")
@@ -82,7 +84,7 @@ def is_gz(p: str | Path) -> bool:
 
 def create_molecule_to_bytes_writer(
     fmt: str | int | FileFormat = "smiles",
-    flavor: int = None,
+    flavor: int | None = None,
     gzip: bool = False
 ):
     """
@@ -97,19 +99,18 @@ def create_molecule_to_bytes_writer(
     :param gzip: Gzip the molecule (forces b64 encoding)
     :return: Writer that takes a molecule and returns bytes
     """
-    if isinstance(fmt, str):
-        if fmt in ("smiles", "canonical smiles", "canonical_smiles"):
+    if isinstance(fmt, str) and fmt in ("smiles", "canonical smiles", "canonical_smiles"):
 
-            def molecule_to_bytes(m: oechem.OEMolBase):
-                """
-                Provides access to a simpler version of a SMILES writer that does not add the title
-                """
-                retval = oechem.OEMolToSmiles(m).encode('utf-8')
-                if gzip:
-                    return base64.b64encode(python_gzip.compress(retval))  # retval is already bytes
-                return retval
+        def molecule_to_bytes(m: oechem.OEMolBase):
+            """
+            Provides access to a simpler version of a SMILES writer that does not add the title
+            """
+            retval = oechem.OEMolToSmiles(m).encode('utf-8')
+            if gzip:
+                return base64.b64encode(python_gzip.compress(retval))  # retval is already bytes
+            return retval
 
-            return molecule_to_bytes
+        return molecule_to_bytes
 
     if isinstance(fmt, (str, int)):
         # Get the molecule format
@@ -135,7 +136,7 @@ def create_molecule_to_bytes_writer(
 
 def create_molecule_to_string_writer(
         fmt: str | int | FileFormat = "smiles",
-        flavor: int = None,
+        flavor: int | None = None,
         gzip: bool = False,
         b64encode: bool = False,
         strip: bool = True
@@ -154,21 +155,20 @@ def create_molecule_to_string_writer(
     :param strip: Strip newlines
     :return: Writer that takes a molecule and returns a string
     """
-    if isinstance(fmt, str):
-        if fmt in ("smiles", "canonical smiles", "canonical_smiles"):
+    if isinstance(fmt, str) and fmt in ("smiles", "canonical smiles", "canonical_smiles"):
 
-            def molecule_to_string(m: oechem.OEMolBase):
-                """
-                Provides access to a simpler version of a SMILES writer that does not add the title
-                """
-                retval = oechem.OEMolToSmiles(m)
-                if gzip:
-                    retval = base64.b64encode(python_gzip.compress(retval.encode('utf-8'))).decode('utf-8')
-                if b64encode:
-                    retval = base64.b64encode(retval.encode('utf-8')).decode('utf-8')
-                return retval
+        def molecule_to_string(m: oechem.OEMolBase):
+            """
+            Provides access to a simpler version of a SMILES writer that does not add the title
+            """
+            retval = oechem.OEMolToSmiles(m)
+            if gzip:
+                retval = base64.b64encode(python_gzip.compress(retval.encode('utf-8'))).decode('utf-8')
+            if b64encode:
+                retval = base64.b64encode(retval.encode('utf-8')).decode('utf-8')
+            return retval
 
-            return molecule_to_string
+        return molecule_to_string
 
     if isinstance(fmt, (str, int)):
         # Get the molecule format
@@ -233,16 +233,16 @@ def predominant_type(series: pd.Series, sample_size: int = 25) -> None | type:
     """
     # Filter out null values
     non_null_series = series[series.notnull()]
-    
+
     if len(non_null_series) == 0:
         return None
-    
+
     # Take a random sample of non-empty rows and test if these are molecules
     # Don't sample more than available
     sample_n = min(sample_size, len(non_null_series))
     if sample_n == 0:
         return None
-        
+
     members = [type(x) for x in non_null_series.sample(n=sample_n)]
     if len(members) > 0:
         counts = Counter(members)

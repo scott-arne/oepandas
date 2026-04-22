@@ -1,23 +1,27 @@
-import logging
 import base64
+import logging
+from collections.abc import Generator, Iterable, Sequence
+from typing import Any, Literal, Self
+from copy import deepcopy
+
 import numpy as np
 import pandas as pd
 from openeye import oechem
-from typing import Any, Generator, Literal, Optional, Self
-from collections.abc import Iterable, Sequence
-from pandas.core.dtypes.dtypes import PandasExtensionDtype
-from pandas.api.extensions import register_extension_dtype
+
 # noinspection PyProtectedMember
-from pandas._typing import FilePath, Dtype
+from pandas._typing import Dtype, FilePath
+from pandas.api.extensions import register_extension_dtype
+from pandas.core.dtypes.dtypes import PandasExtensionDtype
+
+from ..exception import InvalidSMARTS
 from ..util import (
+    create_molecule_to_bytes_writer,
+    create_molecule_to_string_writer,
     get_oeformat,
     is_gz,
     molecule_from_string,
-    create_molecule_to_string_writer,
-    create_molecule_to_bytes_writer,
 )
 from .base import OEExtensionArray
-from ..exception import InvalidSMARTS
 
 log = logging.getLogger("oepandas")
 
@@ -49,7 +53,7 @@ def _read_molecules(
         fp: FilePath,
         file_format: int | str,
         *,
-        flavor: Optional[int] = None,
+        flavor: int | None = None,
         conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default",
         gzip: bool = False,
         no_title: bool = False
@@ -80,6 +84,7 @@ def _read_molecules(
     :param no_title: Remove titles
     :return: Generator over molecules
     """
+    # noinspection PyTypeChecker
     fmt = get_oeformat(file_format, gzip=gzip or is_gz(fp))
 
     with oechem.oemolistream(str(fp)) as ifs:
@@ -148,35 +153,38 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
         :param mols: Molecule or an iterable of molecules
         :param copy: Create copy of the molecules if True
         """
-        # Handle singleton mols
-        if isinstance(mols, oechem.OEMolBase):
-            mols = (mols,)
-
         # Under the hood we only work with oechem.OEMol for consistency
         processed = []
 
-        for i, mol in enumerate(mols):
+        if mols is not None:
 
-            # Molecules
-            if isinstance(mol, oechem.OEMolBase):
+            # Handle singleton mols
+            if isinstance(mols, oechem.OEMolBase):
+                mols = (mols,)
 
-                # Always store molecules as OEMol under-the-hood
-                if deepcopy or isinstance(mol, oechem.OEGraphMol):
-                    processed.append(oechem.OEMol(mol))
+            # noinspection PyTypeChecker
+            for i, mol in enumerate(mols):
 
+                # Molecules
+                if isinstance(mol, oechem.OEMolBase):
+
+                    # Always store molecules as OEMol under-the-hood
+                    if deepcopy or isinstance(mol, oechem.OEGraphMol):
+                        processed.append(oechem.OEMol(mol))
+
+                    else:
+                        processed.append(mol)
+
+                # None/NaN values are allowed
+                elif pd.isna(mol):
+                    processed.append(None)
+
+                # Anything else is invalid
                 else:
-                    processed.append(mol)
-
-            # None/NaN values are allowed
-            elif pd.isna(mol):
-                processed.append(None)
-
-            # Anything else is invalid
-            else:
-                raise TypeError(
-                    f"Cannot create MoleculeArray containing object of type {type(mol).__name__} "
-                    f"at index {i}. All elements must be OEMolBase or None/NaN."
-                )
+                    raise TypeError(
+                        f"Cannot create MoleculeArray containing object of type {type(mol).__name__} "
+                        f"at index {i}. All elements must be OEMolBase or None/NaN."
+                    )
 
         # Superclass initialization
         super().__init__(processed, copy=copy, metadata=metadata)
@@ -266,7 +274,8 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
         molecule_format = molecule_format or oechem.OEFormat_SMI
 
         # Standardize the format
-        molecule_format = get_oeformat(molecule_format)
+        molecule_format: str | int
+        molecule_format_ = get_oeformat(molecule_format)
 
         mols = []
         for i, s in enumerate(strings):  # type: int, str
@@ -278,8 +287,8 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
                 if b64decode:
                     s = base64.b64decode(s).decode('utf-8')
 
-                if not molecule_from_string(mol, s.strip(), molecule_format):
-                    log.warning("Could not convert molecule %d from '%s': %s", i + 1, molecule_format.name, s)
+                if not molecule_from_string(mol, s.strip(), molecule_format_):
+                    log.warning("Could not convert molecule %d from '%s': %s", i + 1, molecule_format_.name, s)
 
             mols.append(mol)
 
@@ -343,11 +352,16 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
     def dtype(self) -> PandasExtensionDtype:
         return MoleculeDtype()
 
-    # def take(self, indices, allow_fill=False, fill_value=None):
-    #     return self.take(indices, allow_fill=allow_fill, fillvalue=fill_value)
-
     def deepcopy(self, metadata: bool | dict | None = True):
-        return MoleculeArray(self._objs, metadata=metadata, deepcopy=True)
+        if metadata is None:
+            metadata_ = None
+        elif isinstance(metadata, dict):
+            metadata_ = metadata
+        else:
+            metadata_ = deepcopy(self.metadata)
+
+        metadata_: dict | None
+        return MoleculeArray(self._objs, metadata=metadata_, deepcopy=True)
 
     # ------------------------------------------------------------
     # I/O
@@ -466,12 +480,18 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
     # --------------------------------------------------------
 
     # noinspection PyPep8Naming
-    def subsearch(self, pattern: str | oechem.OESubSearch, adjustH: bool = False) -> np.ndarray:
+    def substructure_search(
+            self,
+            pattern: str | oechem.OESubSearch,
+            adjustH: bool = False
+    ) -> np.ndarray:
         """
-        Return a boolean array of whether molecules are a substructure match to a pattern
-        :param pattern: SMARTS pattern or OpenEye subsearch object
-        :param adjustH: Match implicit/explicit hydrogen state between query and target molecule
-        :return: Boolean array
+        Return a boolean array of whether molecules are a substructure match to a pattern.
+
+        :param pattern: SMARTS pattern or OESubSearch object.
+        :param adjustH: Match implicit/explicit hydrogen state between query and target molecule.
+        :param mapidx: Annotate SMARTS map indexes on matches
+        :returns: Boolean array.
         """
         ss = oechem.OESubSearch(pattern) if isinstance(pattern, str) else pattern
 

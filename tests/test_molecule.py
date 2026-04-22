@@ -1,13 +1,15 @@
-import os
-import pytest
 import base64 as b64
-import pandas as pd
-import numpy as np
-import oepandas as oepd
-from tempfile import TemporaryDirectory
-from oepandas import MoleculeArray, MoleculeDtype
+import os
 from pathlib import Path
+from tempfile import TemporaryDirectory
+
+import numpy as np
+import pandas as pd
+import pytest
 from openeye import oechem
+
+import oepandas as oepd
+from oepandas import MoleculeArray, MoleculeDtype
 
 ASSETS = Path(Path(__file__).parent, "assets")
 
@@ -39,8 +41,8 @@ def alkanes_df(test_mols):
 
 def copy_mols(test_mols) -> list[oechem.OEGraphMol]:
     """
-    Deep copy of the alkane molecule test set
-    
+    Deep copy of the alkane molecule test set.
+
     :param test_mols: Test molecules to copy
     :returns: Deep copy of molecule test set
     """
@@ -106,11 +108,11 @@ def test_addition():
     Adding two molecule arrays
     """
     x = MoleculeArray.read_smi(Path(ASSETS, "10.smi"))
-    
+
     # Adding two MoleculeArrays
     y = x + x
     assert len(y) == 20
-    
+
     # Adding a molecule to a MoleculeArray
     m = oechem.OEGraphMol()
     y = x + m
@@ -638,8 +640,8 @@ def test_read_oedb():
     assert "MolWt Halide Fraction (Calculated)" in df.columns
     assert "Heavy Atom Count (Calculated)" in df.columns
     assert "Molecule" in df.columns
-    assert df.dtypes["MolWt Halide Fraction (Calculated)"] == float
-    assert df.dtypes["Heavy Atom Count (Calculated)"] == int
+    assert pd.api.types.is_float_dtype(df.dtypes["MolWt Halide Fraction (Calculated)"])
+    assert pd.api.types.is_integer_dtype(df.dtypes["Heavy Atom Count (Calculated)"])
     assert isinstance(df.dtypes["Molecule"], oepd.MoleculeDtype)
 
 def test_to_molecule_csv():
@@ -664,21 +666,21 @@ def test_to_molecule_csv():
         reread_df = pd.read_csv(outpath)
         assert expected_df.equals(reread_df)
 
-def test_molecule_array_subsearch():
+def test_molecule_array_substructure_search():
     """
     SMARTS matching in a MoleculeArray
     """
     x = MoleculeArray.read_sdf(Path(ASSETS, "10.sdf"))
-    sulfones = np.where(x.subsearch('S(=O)=O'))
+    sulfones = np.where(x.substructure_search('S(=O)=O'))
     assert len(sulfones) == 1
     assert sulfones[0] == 8
 
-def test_series_subsearch():
+def test_series_substructure_search():
     """
     SMARTS matching in a Pandas Series
     """
     df = oepd.read_sdf(Path(ASSETS, "10.sdf"))
-    view = df[df.Molecule.chem.subsearch("S(=O)=O")]
+    view = df[df.Molecule.chem.substructure_search("S(=O)=O")]
     assert len(view) == 1
     assert view.iloc[0].Title == 'Omeprazole'
 

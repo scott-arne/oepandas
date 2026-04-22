@@ -1,15 +1,18 @@
-import logging
 import base64
+import logging
+from collections.abc import Generator, Iterable, Sequence
+from pathlib import Path
+from typing import Any, ClassVar, Self
+
 import numpy as np
 import pandas as pd
-from pathlib import Path
 from openeye import oechem
-from typing import Any, ClassVar, Generator, Self
-from collections.abc import Iterable, Sequence
-from pandas.core.dtypes.dtypes import PandasExtensionDtype
-from pandas.api.extensions import register_extension_dtype
+
 # noinspection PyProtectedMember
 from pandas._typing import Dtype
+from pandas.api.extensions import register_extension_dtype
+from pandas.core.dtypes.dtypes import PandasExtensionDtype
+
 from .base import OEExtensionArray
 from .molecule import MoleculeArray
 
@@ -86,7 +89,7 @@ class DesignUnitArray(OEExtensionArray[oechem.OEDesignUnit]):
         """
         design_units = []
 
-        for i, obj in enumerate(scalars):
+        for obj in scalars:
 
             # Nones are OK
             if obj is None or pd.isna(obj):
@@ -132,7 +135,7 @@ class DesignUnitArray(OEExtensionArray[oechem.OEDesignUnit]):
         :return: Array of molecules
         """
         design_units = []
-        for i, s in enumerate(strings):  # type: int, str
+        for s in strings:
             du = oechem.OEDesignUnit()
             design_unit_bytes = base64.b64decode(s.encode('utf-8'))
             oechem.OEReadDesignUnitFromBytes(du, design_unit_bytes)

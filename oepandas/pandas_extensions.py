@@ -1,31 +1,24 @@
 import logging
+from collections.abc import Callable, Hashable, Iterable
+from pathlib import Path
+from typing import Literal, Protocol, TypedDict, cast
+
 import numpy as np
 import pandas as pd
-from pathlib import Path
 from openeye import oechem, oegrid
-from typing import Literal, Protocol, TypedDict, cast
-from collections.abc import Callable, Hashable, Iterable
-from pandas.api.types import is_numeric_dtype, is_float, is_integer
-from pandas.core.dtypes.dtypes import PandasExtensionDtype
-from pandas.api.extensions import register_dataframe_accessor, register_series_accessor
+
 # noinspection PyProtectedMember
-from pandas._typing import (
-    FilePath,
-    ReadBuffer,
-    ReadCsvBuffer,
-    Dtype
-)
-from .util import (
-    get_oeformat,
-    is_gz,
-    create_molecule_to_string_writer,
-    predominant_type
-)
-from .arrays import MoleculeArray, MoleculeDtype, DesignUnitArray, DesignUnitDtype, FingerprintArray
+from pandas._typing import Dtype, FilePath, ReadBuffer, ReadCsvBuffer
+from pandas.api.extensions import register_dataframe_accessor, register_series_accessor
+from pandas.api.types import is_float, is_integer, is_numeric_dtype
+from pandas.core.dtypes.dtypes import PandasExtensionDtype
+
+from .arrays import DesignUnitArray, DesignUnitDtype, FingerprintArray, MoleculeArray, MoleculeDtype
+
 # noinspection PyProtectedMember
 from .arrays.molecule import _read_molecules
 from .exception import FileError
-
+from .util import create_molecule_to_string_writer, get_oeformat, is_gz, predominant_type
 
 log = logging.getLogger("oepandas")
 
@@ -112,17 +105,18 @@ class Dataset:
         if self.usecols is None or col in self.usecols:
 
             t = self.TYPES.get(type(val), object) if force_type is None else force_type
+            is_missing = bool(pd.isna(val)) if not isinstance(val, (oechem.OEMolBase, oechem.OEDesignUnit)) else False
 
             # If this is a new column
             if col not in self.columns:
 
                 self.columns[col] = Column(
                     col,
-                    dtype=self.TYPE_NOT_DETERMINED if pd.isna(val) else t
+                    dtype=cast(Dtype, self.TYPE_NOT_DETERMINED) if is_missing else cast(Dtype, t)
                 )
 
             # Check if we have resolved a data type
-            if self.columns[col].dtype is self.TYPE_NOT_DETERMINED and not pd.isna(val):
+            if self.columns[col].dtype is self.TYPE_NOT_DETERMINED and not is_missing:
                 self.columns[col].dtype = t
 
             else:
@@ -178,6 +172,9 @@ class Dataset:
 
     def __delitem__(self, key):
         del self.columns[key]
+
+    def __contains__(self, key):
+        return key in self.columns
 
 
 def _series_to_molecule_array(series: pd.Series, molecule_format: int = oechem.OEFormat_SMI) -> MoleculeArray:
@@ -406,15 +403,17 @@ def _read_molecules_to_dataframe(
         usecols = frozenset((usecols,)) if isinstance(usecols, str) else frozenset(usecols)
 
     # Make sure numeric is a dict of columns and type strings (None = let Pandas figure it out
+    numeric_columns_dict: dict[str, Literal["integer", "signed", "unsigned", "float"] | None] = {}
     if numeric_columns is not None:
         if isinstance(numeric_columns, str):
-            numeric_columns = {numeric_columns: None}
-
-        elif isinstance(numeric_columns, Iterable) and not isinstance(numeric_columns, dict):
-            numeric_columns = {col: None for col in numeric_columns}
+            numeric_columns_dict = {numeric_columns: None}
+        elif isinstance(numeric_columns, dict):
+            numeric_columns_dict = numeric_columns
+        else:
+            numeric_columns_dict = {col: None for col in numeric_columns}
 
         # Sanity check the molecule column
-        if molecule_column in numeric_columns:
+        if molecule_column in numeric_columns_dict:
             raise KeyError(f'Cannot make molecule column {molecule_column} numeric')
 
     # --------------------------------------------------
@@ -521,7 +520,7 @@ def _read_molecules_to_dataframe(
                 for col in molecule_columns:
 
                     # Check if we have been asked to make this column numeric later
-                    if numeric_columns is not None and col in numeric_columns:
+                    if col in numeric_columns_dict:
                         raise KeyError(f'Cannot make molecule column {col} numeric')
 
                     if col in df.columns:
@@ -534,9 +533,9 @@ def _read_molecules_to_dataframe(
                         log.warning(f'Column not found in DataFrame: {col}')
 
         # Cast numeric columns
-        if numeric_columns is not None:
+        if numeric_columns_dict:
 
-            for col, dtype in numeric_columns.items():
+            for col, dtype in numeric_columns_dict.items():
 
                 if issubclass(type(dtype), float):
                     dtype = "float"
@@ -561,10 +560,11 @@ def _read_molecules_to_dataframe(
         if add_smiles is not None:
 
             # Only adding SMILES to the primary molecule column
-            if molecule_columns is None:
-                molecule_columns = [molecule_column]
+            smiles_source: str | Iterable[str] = (
+                [molecule_column] if molecule_columns is None else molecule_columns
+            )
 
-            _add_smiles_columns(df, molecule_columns, add_smiles)
+            _add_smiles_columns(df, smiles_source, add_smiles)
 
     return df
 
@@ -581,7 +581,7 @@ def read_molecule_csv(
     the molecule column(s).
     """
     # Deletegate the CSV reading to pandas
-    df: pd.DataFrame = pd.read_csv(filepath_or_buffer, **args)
+    df = cast(pd.DataFrame, pd.read_csv(filepath_or_buffer, **args))
 
     # Convert molecule columns if we have data
     if len(df) > 0:
@@ -834,7 +834,7 @@ def read_oedb(
     data = Dataset(usecols=usecols)
 
     # Open the record file
-    filename = str(fp) if isinstance(fp, Path) else fp
+    filename = str(fp)
 
     if filename.startswith("."):
         raise FileError("Reading OERecords from STDIN not yet supported")
@@ -882,7 +882,7 @@ def read_oedb(
                         data.add(name, int_na, idx, force_type=float)
 
                     elif is_integer(int_na):
-                        data.add(name, int_na, idx, force_type=int)
+                        data.add(name, int(int_na), idx, force_type=int)
 
                     else:
                         data.add(name, int_na, idx, force_type=object)
@@ -1020,7 +1020,10 @@ class OEDataFrameAccessor:
         :param inplace: Modify DataFrame in place
         :return: DataFrame with converted columns
         """
-        molecule_format = molecule_format or oechem.OEFormat_SMI
+        fmt: int = (
+            oechem.OEFormat_SMI if molecule_format is None
+            else (molecule_format if isinstance(molecule_format, int) else get_oeformat(molecule_format).oeformat)
+        )
 
         columns = [columns] if isinstance(columns, str) else list(columns)
 
@@ -1042,7 +1045,7 @@ class OEDataFrameAccessor:
                 df[col] = pd.Series(
                     _series_to_molecule_array(
                         df[col],
-                        molecule_format=molecule_format
+                        molecule_format=fmt
                     ),
                     index=df.index,
                     dtype=MoleculeDtype()
@@ -1100,7 +1103,8 @@ class OEDataFrameAccessor:
         if column not in self._obj.columns:
             raise KeyError(f'Column {column} not found in DataFrame')
         # noinspection PyUnresolvedReferences
-        return self._obj[self._obj[column].chem.subsearch(pattern, adjustH=adjustH)]
+        mask = self._obj[column].chem.substructure_search(pattern, adjustH=adjustH)
+        return cast(pd.DataFrame, self._obj[mask])
 
     def substructure_filter(
             self,
@@ -1120,7 +1124,8 @@ class OEDataFrameAccessor:
         if column not in self._obj.columns:
             raise KeyError(f'Column {column} not found in DataFrame')
         # noinspection PyUnresolvedReferences
-        return self._obj[~self._obj[column].chem.subsearch(pattern, adjustH=adjustH)]
+        mask = self._obj[column].chem.substructure_search(pattern, adjustH=adjustH)
+        return cast(pd.DataFrame, self._obj[~mask])
 
     def detect_molecule_columns(self, *, sample_size: int = 25) -> None:
         """
@@ -1131,8 +1136,9 @@ class OEDataFrameAccessor:
         molecule_columns = []
 
         for col in self._obj.columns:
-            if self._obj[col].dtype != MoleculeDtype():
-                t = predominant_type(self._obj[col], sample_size=sample_size)
+            series = cast(pd.Series, self._obj[col])
+            if series.dtype != MoleculeDtype():
+                t = predominant_type(series, sample_size=sample_size)
                 if t is not None and issubclass(t, oechem.OEMolBase):
                     molecule_columns.append(col)
 
@@ -1165,14 +1171,15 @@ class OEDataFrameAccessor:
         :param secondary_molecule_flavor: Flavor for secondary molecule encoding
         :param gzip: Gzip the output file
         """
-        fp = Path(fp)
+        fp_path = Path(fp)
 
+        cols: list[str]
         if columns is None:
-            columns = list(self._obj.columns)
+            cols = list(self._obj.columns)
         elif isinstance(columns, str):
-            columns = [columns]
+            cols = [columns]
         else:
-            columns = list(columns)
+            cols = list(columns)
 
         if primary_molecule_column not in self._obj.columns:
             raise KeyError(f'Primary molecule column {primary_molecule_column} not found in DataFrame')
@@ -1185,24 +1192,28 @@ class OEDataFrameAccessor:
 
         secondary_molecule_cols = set()
 
+        secondary_flavor: int | None = (
+            secondary_molecule_flavor if isinstance(secondary_molecule_flavor, int) else None
+        )
+
         secondary_molecule_to_string = create_molecule_to_string_writer(
             fmt=secondary_molecules_as,
-            flavor=secondary_molecule_flavor,
+            flavor=secondary_flavor,
             gzip=False,
             b64encode=False,
             strip=True
         )
 
-        for col in columns:
+        for col in cols:
             if col not in self._obj.columns:
                 raise KeyError(f'Column {col} not found in DataFrame')
 
             if col != primary_molecule_column and isinstance(self._obj[col].dtype, MoleculeDtype):
                 secondary_molecule_cols.add(col)
 
-        with oechem.oemolostream(str(fp)) as ofs:
+        with oechem.oemolostream(str(fp_path)) as ofs:
             ofs.SetFormat(oechem.OEFormat_SDF)
-            ofs.Setgz(gzip or is_gz(fp))
+            ofs.Setgz(gzip or is_gz(fp_path))
 
             for idx, row in self._obj.iterrows():
                 primary_mol = row[primary_molecule_column]
@@ -1229,7 +1240,7 @@ class OEDataFrameAccessor:
                 if index:
                     oechem.OESetSDData(primary_mol, index_tag, str(idx))
 
-                for col in columns:
+                for col in cols:
                     if col in secondary_molecule_cols:
                         oechem.OESetSDData(
                             primary_mol,
@@ -1265,11 +1276,11 @@ class OEDataFrameAccessor:
         :param title_column: Optional column to get molecule titles
         :param gzip: Gzip the output file
         """
-        fp = Path(fp)
+        fp_path = Path(fp)
 
         fmt = get_oeformat(
             molecule_format,
-            gzip or is_gz(fp)
+            gzip or is_gz(fp_path)
         )
 
         if fmt.oeformat not in (oechem.OEFormat_SMI, oechem.OEFormat_ISM, oechem.OEFormat_CXSMILES,
@@ -1284,13 +1295,13 @@ class OEDataFrameAccessor:
         if not isinstance(self._obj[primary_molecule_column].dtype, MoleculeDtype):
             raise TypeError(f'Primary molecule column {primary_molecule_column} is not a MoleculeDtype')
 
-        with oechem.oemolostream(str(fp)) as ofs:
+        with oechem.oemolostream(str(fp_path)) as ofs:
             ofs.SetFormat(fmt.oeformat)
             ofs.Setgz(fmt.gzip)
             if flavor is not None:
                 ofs.SetFlavor(fmt.oeformat, flavor)
 
-            for idx, row in self._obj.iterrows():
+            for _idx, row in self._obj.iterrows():
                 mol = row[primary_molecule_column].CreateCopy()
 
                 if title_column is not None:
@@ -1435,23 +1446,31 @@ class OEDataFrameAccessor:
                 field_types[col] = oechem.OEMolBase
 
             else:
-                t = predominant_type(self._obj[col], sample_size)
+                series = cast(pd.Series, self._obj[col])
+                t = predominant_type(series, sample_size)
 
-                if issubclass(t, _STRING_TYPES):
+                if t is None:
+                    log.warning(f"Could not determine predominant type for column {col}")
+                    continue
+
+                resolved_t: type = t
+
+                if issubclass(resolved_t, _STRING_TYPES):
                     fields[col] = oechem.OEField(col, oechem.Types.String)
                     field_types[col] = _STRING_TYPES
 
-                elif issubclass(t, _BYTES_TYPES):
+                elif issubclass(resolved_t, _BYTES_TYPES):
                     fields[col] = oechem.OEField(col, oechem.Types.Blob)
                     field_types[col] = _BYTES_TYPES
 
-                elif issubclass(t, oechem.OEDesignUnit):
+                elif issubclass(resolved_t, oechem.OEDesignUnit):
                     fields[col] = oechem.OEField(col, oechem.Types.Chem.DesignUnit)
                     field_types[col] = oechem.OEDesignUnit
 
                 else:
-                    log.warning("Do not know the OEField type that maps to dtype {} in column {}".format(
-                        t.__name__, col))
+                    log.warning(
+                        f"Do not know the OEField type that maps to dtype {resolved_t.__name__} in column {col}"
+                    )
 
         record_type = oechem.OEMolRecord if primary_molecule_column is not None else oechem.OERecord
 
@@ -1465,7 +1484,7 @@ class OEDataFrameAccessor:
             record = record_type()
 
             if primary_molecule_column is not None:
-                record.set_mol(row[primary_molecule_column])
+                cast(oechem.OEMolRecord, record).set_mol(row[primary_molecule_column])
 
             if index and index_field is not None:
                 record.add_field(index_field)
@@ -1615,19 +1634,19 @@ class OESeriesAccessor:
     def to_molecule(
             self,
             *,
-            molecule_format: dict[str, str] | dict[str, int] | str | int | None = None,
+            molecule_format: str | int | None = None,
     ) -> pd.Series:
         """
         Convert a column to molecules and return a series object.
         :param molecule_format: File format for parsing
         :return: Series with molecules
         """
-        molecule_format = molecule_format or oechem.OEFormat_SMI
+        fmt: str | int = molecule_format if molecule_format is not None else oechem.OEFormat_SMI
 
         # noinspection PyProtectedMember
         arr = MoleculeArray._from_sequence_of_strings(
             self._obj,
-            molecule_format=molecule_format
+            molecule_format=fmt
         )
 
         return pd.Series(arr, dtype=MoleculeDtype())
@@ -1703,7 +1722,7 @@ class OESeriesAccessor:
         arr = cast(MoleculeArray, self._obj.array).to_smiles(flavor=flavor)
         return pd.Series(arr, index=self._obj.index, dtype=object)
 
-    def subsearch(
+    def substructure_search(
             self,
             pattern: str | oechem.OESubSearch,
             *,
@@ -1711,46 +1730,37 @@ class OESeriesAccessor:
     ) -> pd.Series:
         """
         Perform a substructure search.
+
         :param pattern: SMARTS pattern or OESubSearch object
         :param adjustH: Adjust implicit / explicit hydrogens to match query
-        :return: Boolean series indicating matches
+        :returns: Boolean series indicating matches
         """
         if not isinstance(self._obj.dtype, MoleculeDtype):
             raise TypeError(
-                "subsearch only works on molecule columns (oepandas.MoleculeDtype). If this column has "
+                "substructure_search only works on molecule columns (oepandas.MoleculeDtype). If this column has "
                 "molecules, use series.chem.as_molecule() to convert to a molecule column first."
             )
 
-        return pd.Series(cast(MoleculeArray, self._obj.array).subsearch(pattern, adjustH=adjustH), dtype=bool)
-
-    def substructure_search(
-        self,
-        pattern: str | oechem.OESubSearch,
-        *,
-        adjustH: bool = False  # noqa
-    ):
-        """
-        Perform a substructure search.
-        :param pattern: SMARTS pattern or OESubSearch object
-        :param adjustH: Adjust implicit / explicit hydrogens to match query
-        :return: Boolean series indicating matches
-        """
-        return self.subsearch(pattern, adjustH=adjustH)
+        return pd.Series(
+            cast(MoleculeArray, self._obj.array).substructure_search(pattern, adjustH=adjustH),
+            index=self._obj.index,
+            dtype=bool,
+        )
 
     def substructure_filter(
-        self,
-        pattern: str | oechem.OESubSearch,
-        *,
-        adjustH: bool = False  # noqa
-    ):
+            self,
+            pattern: str | oechem.OESubSearch,
+            *,
+            adjustH: bool = False  # noqa
+    ) -> pd.Series:
         """
         Filter out molecules matching a substructure (inverse of substructure_search).
 
         :param pattern: SMARTS pattern or OESubSearch object
         :param adjustH: Adjust implicit / explicit hydrogens to match query
-        :return: Boolean series indicating non-matches
+        :returns: Boolean series indicating non-matches
         """
-        return ~self.subsearch(pattern, adjustH=adjustH)
+        return ~self.substructure_search(pattern, adjustH=adjustH)
 
     def create_fingerprints(
             self,

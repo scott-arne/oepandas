@@ -1,22 +1,24 @@
-import typing
 import itertools
-import scipy.special
 import math
-import numpy as np
-from numpy.typing import DTypeLike
-import pandas as pd
-from copy import copy as shallow_copy
+import typing
 from collections import namedtuple
 from collections.abc import Iterable, Sequence
-from typing import Any, Optional, Self
-from tqdm.auto import tqdm
-from openeye import oegraphsim, oechem
-from pandas.core.dtypes.dtypes import PandasExtensionDtype
-from pandas.api.extensions import register_extension_dtype
+from copy import copy as shallow_copy
+from typing import Any, Self, cast
+
+import numpy as np
+import pandas as pd
+import scipy.special
+from numpy.typing import DTypeLike
+from openeye import oechem, oegraphsim
+
 # noinspection PyProtectedMember
 from pandas._typing import Dtype
-from .base import OEExtensionArray
+from pandas.api.extensions import register_extension_dtype
+from pandas.core.dtypes.dtypes import PandasExtensionDtype
+from tqdm.auto import tqdm
 
+from .base import OEExtensionArray
 
 ########################################################################################################################
 # Fingerprint conversion
@@ -152,7 +154,7 @@ def get_atom_mask(atom_type):
     """
     atom_mask = oegraphsim.OEFPAtomType_None
     for m in atom_type.split("|"):
-        mask = atom_fp_typemap.get(m.strip().lower().replace("oefpatomtype_", ""), None)
+        mask = atom_fp_typemap.get(m.strip().lower().replace("oefpatomtype_", ""))
         if mask is None:
             raise KeyError(f'{m} is not a known OEAtomFPType')
         atom_mask |= mask
@@ -176,7 +178,7 @@ def get_bond_mask(bond_type):
     # Bond mask
     bond_mask = oegraphsim.OEFPBondType_None
     for m in bond_type.split("|"):
-        mask = bond_fp_typemap.get(m.strip().lower().replace("oefpbondtype_", ""), None)
+        mask = bond_fp_typemap.get(m.strip().lower().replace("oefpbondtype_", ""))
         if mask is None:
             raise KeyError(f'{m} is not a known OEBondFPType')
         bond_mask |= mask
@@ -369,7 +371,7 @@ def get_openeye_comparison_metric(name):
     :param name: Name of the comparison function
     :return: The comparison function
     """
-    cf = openeye_comparison_metric.get(name.lower(), None)
+    cf = openeye_comparison_metric.get(name.lower())
     if cf is None:
         raise KeyError(f'Unknown comparison function: {name}')
     return cf
@@ -424,14 +426,17 @@ class FingerprintArray(OEExtensionArray[oegraphsim.OEFingerPrint]):
         :param metadata: Optional metadata dictionary (e.g., fingerprint parameters).
         """
         # Handle singleton fingerprints
+        fps_iter: Iterable[oegraphsim.OEFingerPrint | None]
         if fps is None:
-            fps = []
+            fps_iter = []
         elif isinstance(fps, oegraphsim.OEFingerPrint):
-            fps = (fps,)
+            fps_iter = (fps,)
+        else:
+            fps_iter = fps
 
         # Process fingerprints
         processed = []
-        for fp in fps:
+        for fp in fps_iter:
             if isinstance(fp, oegraphsim.OEFingerPrint):
                 processed.append(oegraphsim.OEFingerPrint(fp) if copy else fp)
             elif pd.isna(fp) or fp is None:
@@ -635,8 +640,14 @@ class FingerprintArray(OEExtensionArray[oegraphsim.OEFingerPrint]):
         :param metadata: Metadata for copied object, whether to copy metadata, or None.
         :returns: Deep copy of this array.
         """
-        if isinstance(metadata, bool) and metadata:
-            metadata = shallow_copy(self.metadata)
+        resolved_metadata: dict | None
+        if isinstance(metadata, bool):
+            if metadata:
+                resolved_metadata = shallow_copy(self.metadata)
+            else:
+                resolved_metadata = None
+        else:
+            resolved_metadata = metadata
 
         copied_fps = []
         for fp in self._objs:
@@ -645,7 +656,7 @@ class FingerprintArray(OEExtensionArray[oegraphsim.OEFingerPrint]):
             else:
                 copied_fps.append(None)
 
-        return FingerprintArray(copied_fps, copy=False, metadata=metadata)
+        return cast(Self, FingerprintArray(copied_fps, copy=False, metadata=resolved_metadata))
 
     def fillna(
         self,
@@ -690,7 +701,7 @@ class FingerprintArray(OEExtensionArray[oegraphsim.OEFingerPrint]):
                 filled.append(value)
                 fills_done += 1
 
-        return FingerprintArray(filled, copy=False, metadata=shallow_copy(self.metadata))
+        return cast(Self, FingerprintArray(filled, copy=False, metadata=shallow_copy(self.metadata)))
 
     def dropna(self) -> Self:
         """
@@ -704,7 +715,7 @@ class FingerprintArray(OEExtensionArray[oegraphsim.OEFingerPrint]):
             if fp is not None and isinstance(fp, oegraphsim.OEFingerPrint) and fp.IsValid():
                 non_missing.append(fp)
 
-        return FingerprintArray(non_missing, copy=False, metadata=shallow_copy(self.metadata))
+        return cast(Self, FingerprintArray(non_missing, copy=False, metadata=shallow_copy(self.metadata)))
 
     def tolist(self, copy: bool = False) -> list[oegraphsim.OEFingerPrint | None]:
         """
@@ -721,8 +732,9 @@ class FingerprintArray(OEExtensionArray[oegraphsim.OEFingerPrint]):
     # Conversion Methods
     # --------------------------------------------------------
 
+    # noinspection PyTypeHints
     def to_numpy(
-            self, dtype: Optional[DTypeLike] = None,
+            self, dtype: DTypeLike | None = None,
             copy: bool = False,
             na_value: object = pd.api.extensions.no_default
     ) -> np.ndarray:
@@ -810,10 +822,8 @@ class FingerprintArray(OEExtensionArray[oegraphsim.OEFingerPrint]):
                     f"Cannot compare arrays of different lengths: {len(self)} vs {len(other)}"
                 )
             similarities = []
-            for fp1, fp2 in zip(self._objs, other._objs):
-                if fp1 is None or fp2 is None:
-                    similarities.append(np.nan)
-                elif not fp1.IsValid() or not fp2.IsValid():
+            for fp1, fp2 in zip(self._objs, other._objs, strict=True):
+                if fp1 is None or fp2 is None or not fp1.IsValid() or not fp2.IsValid():
                     similarities.append(np.nan)
                 else:
                     similarities.append(oegraphsim.OETanimoto(fp1, fp2))
@@ -851,10 +861,8 @@ class FingerprintArray(OEExtensionArray[oegraphsim.OEFingerPrint]):
                     f"Cannot compare arrays of different lengths: {len(self)} vs {len(other)}"
                 )
             distances = []
-            for fp1, fp2 in zip(self._objs, other._objs):
-                if fp1 is None or fp2 is None:
-                    distances.append(np.nan)
-                elif not fp1.IsValid() or not fp2.IsValid():
+            for fp1, fp2 in zip(self._objs, other._objs, strict=True):
+                if fp1 is None or fp2 is None or not fp1.IsValid() or not fp2.IsValid():
                     distances.append(np.nan)
                 else:
                     distances.append(OEJaccard(fp1, fp2))
@@ -898,6 +906,7 @@ class FingerprintDtype(PandasExtensionDtype):
     def __hash__(self) -> int:
         return hash(self.name)
 
+    # noinspection PyTypeHints
     def __eq__(self, other: str | type) -> bool:
         if isinstance(other, str):
             return self.name == other

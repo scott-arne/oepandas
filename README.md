@@ -144,7 +144,7 @@ df["SMILES"] = df.Molecule.chem.to_smiles()
 df["MolCopy"] = df.Molecule.chem.copy_molecules()
 
 # Substructure searching with SMARTS
-has_carboxylic_acid = df.Molecule.chem.subsearch("C(=O)O")
+has_carboxylic_acid = df.Molecule.chem.substructure_search("C(=O)O")
 df_acids = df[has_carboxylic_acid]
 ```
 
@@ -560,7 +560,7 @@ Access these methods via `series.chem.<method>()`:
 | `to_molecule_bytes(molecule_format=OEFormat_SMI, flavor=None, gzip=False)` | `Series[bytes]` | Convert to byte strings |
 | `to_molecule_strings(molecule_format="smiles", flavor=None, gzip=False, b64encode=False)` | `Series[str]` | Convert to string representations |
 | `to_smiles(flavor=OESMILESFlag_ISOMERIC)` | `Series[str]` | Convert to SMILES strings |
-| `subsearch(pattern, adjustH=False)` | `Series[bool]` | Substructure search with SMARTS pattern |
+| `substructure_search(pattern, adjustH=False)` | `Series[bool]` | Substructure search with SMARTS pattern |
 
 #### Design Unit Methods
 
@@ -602,7 +602,7 @@ strings = arr.to_molecule_strings(molecule_format="sdf")
 bytes_arr = arr.to_molecule_bytes(molecule_format=OEFormat_OEB)
 
 # Substructure searching
-matches = arr.subsearch("c1ccccc1")
+matches = arr.substructure_search("c1ccccc1")
 
 # Utility methods
 arr.deepcopy()        # Deep copy
@@ -665,7 +665,7 @@ lipinski = (
 df_druglike = df[lipinski]
 
 # 5. Substructure search for carboxylic acids
-has_acid = df_druglike.Molecule.chem.subsearch("C(=O)O")
+has_acid = df_druglike.Molecule.chem.substructure_search("C(=O)O")
 df_acids = df_druglike[has_acid]
 
 # 6. Export results

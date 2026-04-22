@@ -1,9 +1,11 @@
-import pytest
+from pathlib import Path
+
 import pandas as pd
+import pytest
+from openeye import oechem
+
 import oepandas as oepd
 from oepandas import DesignUnitArray, DesignUnitDtype
-from pathlib import Path
-from openeye import oechem
 
 oechem.OEThrow.SetLevel(oechem.OEErrorLevel_Fatal)
 
