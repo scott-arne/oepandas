@@ -1,4 +1,5 @@
 import logging
+import warnings
 from collections.abc import Callable, Hashable, Iterable
 from pathlib import Path
 from typing import Literal, Protocol, TypedDict, cast
@@ -12,6 +13,28 @@ from pandas._typing import Dtype, FilePath, ReadBuffer, ReadCsvBuffer
 from pandas.api.extensions import register_dataframe_accessor, register_series_accessor
 from pandas.api.types import is_float, is_integer, is_numeric_dtype
 from pandas.core.dtypes.dtypes import PandasExtensionDtype
+
+
+def _register_dataframe_accessor(name: str) -> Callable[[type], type]:
+    """Register a DataFrame accessor, suppressing the override warning that
+    pandas emits when the module is re-imported (e.g. under marimo/Jupyter
+    autoreload)."""
+    def decorator(cls: type) -> type:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            return register_dataframe_accessor(name)(cls)
+    return decorator
+
+
+def _register_series_accessor(name: str) -> Callable[[type], type]:
+    """Register a Series accessor, suppressing the override warning that
+    pandas emits when the module is re-imported (e.g. under marimo/Jupyter
+    autoreload)."""
+    def decorator(cls: type) -> type:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            return register_series_accessor(name)(cls)
+    return decorator
 
 from .arrays import DesignUnitArray, DesignUnitDtype, FingerprintArray, MoleculeArray, MoleculeDtype
 
@@ -218,6 +241,23 @@ def _series_to_molecule_array(series: pd.Series, molecule_format: int = oechem.O
                 mols.append(m)
 
     return MoleculeArray(mols)
+
+
+def _clear_mol_titles(mol: oechem.OEMolBase) -> None:
+    """
+    Clear the title on a molecule as well as its active conformer if it is a multi-conformer molecule.
+
+    The 2D depiction of an :class:`oechem.OEMol` renders the active conformer's title; clearing only the parent
+    molecule's title is not enough.
+
+    :param mol: Molecule to clear titles on (modified in place).
+    """
+    mol.SetTitle("")
+    if isinstance(mol, oechem.OEMol):
+        active = mol.GetActive()
+        if active is not None:
+            active.SetTitle("")
+
 
 ########################################################################################################################
 # Molecule Array: I/O
@@ -574,11 +614,15 @@ def read_molecule_csv(
     molecule_columns: str | dict[str, int] | dict[str, str] | Literal["detect"],
     *,
     add_smiles: None | bool | str | Iterable[str] = None,
+    no_title: bool = False,
     **args
 ) -> pd.DataFrame:
     """
     Read a delimited text file with molecules. Note that this wraps the standard Pandas CSV reader and then converts
     the molecule column(s).
+
+    :param no_title: If True, clear titles (parent molecule and active conformer) on all molecules in the converted
+        molecule column(s).
     """
     # Deletegate the CSV reading to pandas
     df = cast(pd.DataFrame, pd.read_csv(filepath_or_buffer, **args))
@@ -587,8 +631,19 @@ def read_molecule_csv(
     if len(df) > 0:
         if molecule_columns == "detect":
             df.chem.detect_molecule_columns()
+            mol_col_names = [c for c in df.columns if isinstance(df.dtypes[c], MoleculeDtype)]
         else:
             df.chem.as_molecule(molecule_columns, inplace=True)
+            mol_col_names = (
+                [molecule_columns] if isinstance(molecule_columns, str)
+                else list(molecule_columns)
+            )
+
+        if no_title:
+            for col in mol_col_names:
+                for mol in df[col]:
+                    if mol is not None:
+                        _clear_mol_titles(mol)
 
     # Process 'add_smiles' by first standardizing it to a dictionary
     if add_smiles is not None:
@@ -607,7 +662,8 @@ def read_smi(
     molecule_column: str = "Molecule",
     title_column: str = "Title",
     smiles_column_name: str = "SMILES",
-    inchi_key_column_name: str = "InChI Key"
+    inchi_key_column_name: str = "InChI Key",
+    no_title: bool = False
 ) -> pd.DataFrame:
     """
     Read structures from a SMILES file to a dataframe
@@ -620,6 +676,7 @@ def read_smi(
     :param title_column: Name of the column with molecule titles in the dataframe
     :param smiles_column_name: Name of the SMILES column (if smiles is True)
     :param inchi_key_column_name: Name of the InChI key column (if inchi_key is True)
+    :param no_title: Do not read any title information (clears both parent molecule and active conformer titles)
     :return: DataFrame with molecules
     """
     if not isinstance(filepath_or_buffer, (Path, str)):
@@ -649,6 +706,7 @@ def read_smi(
             filepath_or_buffer,
             file_format=oechem.OEFormat_CXSMILES if cx else oechem.OEFormat_SMI,
             flavor=flavor,
+            no_title=no_title,
     ):
         row_data = {title_column: mol.GetTitle(), molecule_column: mol.CreateCopy()}
 
@@ -823,12 +881,14 @@ def read_oedb(
     *,
     usecols: None | str | Iterable[str] = None,
     int_na: int | None = None,
+    no_title: bool = False,
 ) -> pd.DataFrame:
     """
     Read an OEDB file
     :param fp: Path to OEDB file
     :param usecols: Optional columns to use
     :param int_na: Value to use in place of NaN for integers
+    :param no_title: If True, clear titles (parent molecule and active conformer) on all molecules in the DataFrame.
     :return: DataFrame
     """
     data = Dataset(usecols=usecols)
@@ -903,6 +963,8 @@ def read_oedb(
             # ------------------------------
             elif dtype == oechem.Types.Chem.Mol.get_name():
                 val = record.get_value(field)
+                if no_title and val is not None:
+                    _clear_mol_titles(val)
                 data.add(name, val, idx, force_type=MoleculeDtype())
 
             # ------------------------------
@@ -992,7 +1054,7 @@ _BYTES_TYPES = (
 )
 
 
-@register_dataframe_accessor("chem")
+@_register_dataframe_accessor("chem")
 class OEDataFrameAccessor:
     """
     Unified accessor for all OpenEye-related DataFrame operations.
@@ -1544,7 +1606,7 @@ class OEDataFrameAccessor:
         return df
 
 
-@register_series_accessor("chem")
+@_register_series_accessor("chem")
 class OESeriesAccessor:
     """
     Unified accessor for all OpenEye-related Series operations.
@@ -1932,7 +1994,8 @@ def read_oedu(
     *,
     design_unit_column: str = "Design_Unit",
     title_column: str = "Title",
-    generic_data: bool = True
+    generic_data: bool = True,
+    no_title: bool = False,
 ) -> pd.DataFrame:
     """
     Read an OEDB file into a Pandas DataFrame
@@ -1940,6 +2003,7 @@ def read_oedu(
     :param design_unit_column: Column name for the design units
     :param title_column: Column name for the design unit title
     :param generic_data: Read data from the design unit into columns
+    :param no_title: If True, clear the design unit titles so the title column is empty.
     :return: Pandas DataFrame
     """
     # Cannot yet read from STDIN or other buffers
@@ -1948,6 +2012,10 @@ def read_oedu(
 
     # Read design units
     du_array = DesignUnitArray.read_oedu(filepath_or_buffer)
+
+    if no_title:
+        for du in du_array:
+            du.SetTitle("")
 
     # Read data
     data = Dataset()
