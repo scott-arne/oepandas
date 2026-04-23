@@ -93,17 +93,11 @@ class DisplayArray(OEExtensionArray[oedepict.OE2DMolDisplay]):
         :param metadata: Metadata for copied object (if dict), or whether to copy the metadata, or None (same as False)
         :return: Deep copy of object
         """
-        from copy import copy as shallow_copy
-
-        if isinstance(metadata, bool) and metadata:
-            metadata = shallow_copy(self.metadata)
-
-        # Use DisplayArray's special copy constructor approach for deep copying
         new_obj = self.__class__(
             [oedepict.OE2DMolDisplay(obj) if isinstance(obj, self._base_openeye_type) else obj
              for obj in self._objs],
-             copy=False,  # We've already done the copying above
-             metadata=metadata
+            copy=False,
+            metadata=self._resolve_metadata(metadata)
         )
 
         return new_obj

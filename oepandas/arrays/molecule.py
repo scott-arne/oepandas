@@ -2,7 +2,6 @@ import base64
 import logging
 from collections.abc import Generator, Iterable, Sequence
 from typing import Any, Literal, Self
-from copy import deepcopy
 
 import numpy as np
 import pandas as pd
@@ -353,15 +352,7 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
         return MoleculeDtype()
 
     def deepcopy(self, metadata: bool | dict | None = True):
-        if metadata is None:
-            metadata_ = None
-        elif isinstance(metadata, dict):
-            metadata_ = metadata
-        else:
-            metadata_ = deepcopy(self.metadata)
-
-        metadata_: dict | None
-        return MoleculeArray(self._objs, metadata=metadata_, deepcopy=True)
+        return MoleculeArray(self._objs, metadata=self._resolve_metadata(metadata), deepcopy=True)
 
     # ------------------------------------------------------------
     # I/O

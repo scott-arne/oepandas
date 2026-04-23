@@ -640,15 +640,6 @@ class FingerprintArray(OEExtensionArray[oegraphsim.OEFingerPrint]):
         :param metadata: Metadata for copied object, whether to copy metadata, or None.
         :returns: Deep copy of this array.
         """
-        resolved_metadata: dict | None
-        if isinstance(metadata, bool):
-            if metadata:
-                resolved_metadata = shallow_copy(self.metadata)
-            else:
-                resolved_metadata = None
-        else:
-            resolved_metadata = metadata
-
         copied_fps = []
         for fp in self._objs:
             if fp is not None:
@@ -656,7 +647,7 @@ class FingerprintArray(OEExtensionArray[oegraphsim.OEFingerPrint]):
             else:
                 copied_fps.append(None)
 
-        return cast(Self, FingerprintArray(copied_fps, copy=False, metadata=resolved_metadata))
+        return cast(Self, FingerprintArray(copied_fps, copy=False, metadata=self._resolve_metadata(metadata)))
 
     def fillna(
         self,

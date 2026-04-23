@@ -80,18 +80,24 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         else:
             self._objs.extend(map(lambda x: None if pd.isna(x) else x, items))
 
+    def _resolve_metadata(self, metadata: bool | dict | None) -> dict | None:
+        """
+        Resolve the ``metadata`` argument to ``copy``/``deepcopy`` into a value acceptable by ``__init__``.
+        ``True`` copies the parent metadata; ``False``/``None`` yields ``None``; a dict is passed through.
+        """
+        if isinstance(metadata, bool):
+            return shallow_copy(self.metadata) if metadata else None
+        return metadata
+
     def copy(self, metadata: bool | dict | None = True) -> Self:
         """
         Make a shallow copy of this object
         :param metadata: Metadata for copied object (if dict), or whether to copy the metadata, or None (same as False)
         :return: Shallow copy of this object
         """
-        if isinstance(metadata, bool) and metadata:
-            metadata = shallow_copy(self.metadata)
-
         new_obj = self.__class__(
             shallow_copy(self._objs),
-            metadata=metadata
+            metadata=self._resolve_metadata(metadata)
         )
         return new_obj
 
@@ -101,13 +107,10 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         :param metadata: Metadata for copied object (if dict), or whether to copy the metadata, or None (same as False)
         :return: Deep copy of object
         """
-        if isinstance(metadata, bool) and metadata:
-            metadata = shallow_copy(self.metadata)
-
         new_obj = self.__class__(
             [obj.CreateCopy() if isinstance(obj, self._base_openeye_type) else obj
              for obj in self._objs],
-            metadata=metadata
+            metadata=self._resolve_metadata(metadata)
         )
 
         return new_obj
