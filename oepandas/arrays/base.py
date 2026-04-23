@@ -368,19 +368,69 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
 
     def __setitem__(self, index, value) -> None:
         """
-        Set an item in the array
-        :param index: Item index
-        :type index: int
-        :param value: Item to set
-        :type value: oechem.OEMolBase
-        :return:
+        Set one or more items in the array.
+
+        Supports scalar-int, slice, integer-array, and boolean-array indexers, as
+        well as single-element tuples wrapping any of the above (pandas'
+        ``column_setitem`` wraps the column indexer as ``(idx,)`` before dispatch).
+        Scalar values are broadcast across multi-element indexers; sequence values
+        must match the indexer length.
+
+        :param index: Item index.
+        :param value: Item or items to assign.
         """
-        # Handle NaN values consistently with constructor
-        is_na = value is None or value is pd.NA or (isinstance(value, float) and np.isnan(value))
-        if is_na:
-            self._objs[index] = None
+        # Unwrap single-element tuple indexer (pandas column_setitem passes (idx,))
+        if isinstance(index, tuple):
+            if len(index) != 1:
+                raise IndexError(
+                    f"{type(self).__name__} only supports 1-D indexing, got tuple of length {len(index)}"
+                )
+            index = index[0]
+
+        def _normalize_scalar(v):
+            is_na = v is None or v is pd.NA or (isinstance(v, float) and np.isnan(v))
+            return None if is_na else v
+
+        # Scalar int index: single assignment
+        if isinstance(index, (int, np.integer)):
+            self._objs[int(index)] = _normalize_scalar(value)
+            return
+
+        # Slice: resolve to explicit positions so we can broadcast lists
+        if isinstance(index, slice):
+            positions = list(range(*index.indices(len(self._objs))))
         else:
-            self._objs[index] = value
+            # Array-like indexer: convert to numpy for unified handling
+            idx_arr = np.asarray(index)
+            if idx_arr.dtype == bool:
+                if len(idx_arr) != len(self._objs):
+                    raise IndexError(
+                        f"Boolean index length {len(idx_arr)} does not match array length {len(self._objs)}"
+                    )
+                positions = [i for i, flag in enumerate(idx_arr) if flag]
+            else:
+                positions = [int(i) for i in idx_arr]
+
+        # Determine whether value is a scalar (broadcast) or a sequence (zip)
+        value_is_scalar = (
+            value is None
+            or value is pd.NA
+            or isinstance(value, self._base_openeye_type)
+            or (isinstance(value, float) and np.isnan(value))
+        )
+
+        if value_is_scalar:
+            normalized = _normalize_scalar(value)
+            for pos in positions:
+                self._objs[pos] = normalized
+        else:
+            values = list(value)
+            if len(values) != len(positions):
+                raise ValueError(
+                    f"Cannot assign {len(values)} values to {len(positions)} positions"
+                )
+            for pos, v in zip(positions, values, strict=True):
+                self._objs[pos] = _normalize_scalar(v)
 
     def __getitem__(self, index) -> T | Self:
         """

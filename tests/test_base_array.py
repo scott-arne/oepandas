@@ -219,6 +219,82 @@ class TestOEExtensionArrayBase:
         arr[2] = np.nan
         assert arr[2] is None
 
+    def test_molecule_array_setitem_indexer_forms(self, test_molecules):
+        """Test __setitem__ supports all indexer forms pandas may pass (scalar int,
+        slice, integer array, boolean array, and single-element tuple wrapping any
+        of the above, as emitted by pandas' internal column_setitem)."""
+        new_mol = oechem.OEMol()
+        oechem.OESmilesToMol(new_mol, "CCCCC")
+
+        # Tuple-wrapped scalar (as pandas column_setitem emits)
+        arr = MoleculeArray(test_molecules)
+        arr[(1,)] = new_mol
+        assert arr[1] is new_mol
+
+        # Slice assignment broadcasting a scalar
+        arr = MoleculeArray(test_molecules)
+        arr[1:3] = new_mol
+        assert arr[1] is new_mol
+        assert arr[2] is new_mol
+
+        # Tuple-wrapped slice
+        arr = MoleculeArray(test_molecules)
+        arr[(slice(0, 2),)] = new_mol
+        assert arr[0] is new_mol
+        assert arr[1] is new_mol
+
+        # Integer ndarray with scalar broadcast
+        arr = MoleculeArray(test_molecules)
+        arr[np.array([0, 2])] = new_mol
+        assert arr[0] is new_mol
+        assert arr[2] is new_mol
+        assert arr[1] is test_molecules[1]
+
+        # Boolean ndarray with scalar broadcast
+        arr = MoleculeArray(test_molecules)
+        arr[np.array([True, False, True, False])] = new_mol
+        assert arr[0] is new_mol
+        assert arr[2] is new_mol
+        assert arr[1] is test_molecules[1]
+
+        # Integer list with sequence value
+        arr = MoleculeArray(test_molecules)
+        other = oechem.OEMol()
+        oechem.OESmilesToMol(other, "CCCCCC")
+        arr[[0, 3]] = [new_mol, other]
+        assert arr[0] is new_mol
+        assert arr[3] is other
+
+        # NaN broadcast over slice
+        arr = MoleculeArray(test_molecules)
+        arr[1:3] = np.nan
+        assert arr[1] is None
+        assert arr[2] is None
+
+    def test_molecule_array_dataframe_loc_assignment(self, test_molecules):
+        """Test df.loc[...] = value assignment path (which wraps the column indexer
+        as a single-element tuple internally)."""
+        new_mol = oechem.OEMol()
+        oechem.OESmilesToMol(new_mol, "CCCCC")
+
+        df = pd.DataFrame({"Core": MoleculeArray(test_molecules), "x": [1, 2, 3, 4]})
+
+        # Scalar label
+        df.loc[1, "Core"] = new_mol
+        assert df["Core"].array[1] is new_mol
+
+        # Boolean mask
+        df = pd.DataFrame({"Core": MoleculeArray(test_molecules), "x": [1, 2, 3, 4]})
+        df.loc[df["x"] > 2, "Core"] = new_mol
+        assert df["Core"].array[2] is new_mol
+        assert df["Core"].array[3] is new_mol
+
+        # Slice
+        df = pd.DataFrame({"Core": MoleculeArray(test_molecules), "x": [1, 2, 3, 4]})
+        df.loc[1:2, "Core"] = new_mol
+        assert df["Core"].array[1] is new_mol
+        assert df["Core"].array[2] is new_mol
+
     def test_molecule_array_len(self, test_molecules):
         """Test __len__ method"""
         arr = MoleculeArray(test_molecules)
