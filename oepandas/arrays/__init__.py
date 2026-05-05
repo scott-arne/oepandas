@@ -1,7 +1,8 @@
 from .design_unit import DesignUnitArray, DesignUnitDtype
 from .display import DisplayArray, DisplayDtype
 from .fingerprint import FingerprintArray, FingerprintDtype
-from .molecule import MoleculeArray, MoleculeDtype
+from .molecule import MoleculeArray, MoleculeDtype, MoleculeType
+from .query import QueryArray, QueryDtype, QueryFormat
 
 __all__ = [
     "DesignUnitArray",
@@ -12,6 +13,10 @@ __all__ = [
     "FingerprintDtype",
     "MoleculeArray",
     "MoleculeDtype",
+    "MoleculeType",
+    "QueryArray",
+    "QueryDtype",
+    "QueryFormat",
 ]
 
 ########################################################################################################################

@@ -1,7 +1,18 @@
 import contextlib
 import logging
 
-from .arrays import DesignUnitArray, DesignUnitDtype, DisplayArray, DisplayDtype, MoleculeArray, MoleculeDtype
+from .arrays import (
+    DesignUnitArray,
+    DesignUnitDtype,
+    DisplayArray,
+    DisplayDtype,
+    MoleculeArray,
+    MoleculeDtype,
+    MoleculeType,
+    QueryArray,
+    QueryDtype,
+    QueryFormat,
+)
 from .exception import FileError, UnsupportedFileFormat
 from .pandas_extensions import read_molecule_csv, read_oeb, read_oedb, read_oedu, read_sdf, read_smi
 
@@ -14,6 +25,10 @@ __all__ = [
     "DesignUnitDtype",
     "MoleculeDtype",
     "MoleculeArray",
+    "MoleculeType",
+    "QueryDtype",
+    "QueryArray",
+    "QueryFormat",
     "DisplayDtype",
     "DisplayArray",
     "FileError",
