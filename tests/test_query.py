@@ -98,3 +98,39 @@ def test_query_dtype_round_trips_through_series():
 
     assert isinstance(series.dtype, QueryDtype)
     assert isinstance(series.iloc[0], oechem.OEQMol)
+
+
+def test_query_dtype_series_scalar_string_assignment_preserves_query_dtype():
+    series = pd.Series(QueryArray.from_sequence(["[#6]"]), dtype=QueryDtype())
+
+    series.iloc[0] = "[#7]"
+
+    assert isinstance(series.dtype, QueryDtype)
+    assert isinstance(series.iloc[0], oechem.OEQMol)
+    assert series.iloc[0].IsValid()
+
+
+def test_query_array_scalar_molecule_assignment_casts_to_query_mol():
+    arr = QueryArray.from_sequence(["[#6]"])
+    mol = oechem.OEMol()
+    assert oechem.OEParseSmiles(mol, "CCO")
+
+    arr[0] = mol
+
+    assert isinstance(arr[0], oechem.OEQMol)
+    assert oechem.OEMolToSmiles(arr[0]) == "CCO"
+
+
+def test_query_array_scalar_missing_assignment_stores_none():
+    arr = QueryArray.from_sequence(["[#6]"])
+
+    arr[0] = None
+
+    assert arr[0] is None
+
+
+def test_query_array_list_like_invalid_assignment_raises_type_error():
+    arr = QueryArray.from_sequence(["[#6]"])
+
+    with pytest.raises(TypeError, match="Cannot assign query from list"):
+        arr[[0]] = [[1, 2]]

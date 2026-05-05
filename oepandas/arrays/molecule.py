@@ -597,18 +597,26 @@ class MoleculeArray(OEExtensionArray[oechem.OEMolBase]):
     # noinspection PyPep8Naming
     def substructure_search(
             self,
-            pattern: str | oechem.OESubSearch,
+            pattern: str | oechem.OEQMol | oechem.OESubSearch,
             adjustH: bool = False
     ) -> np.ndarray:
         """
         Return a boolean array of whether molecules are a substructure match to a pattern.
 
-        :param pattern: SMARTS pattern or OESubSearch object.
+        :param pattern: SMARTS pattern, OEQMol query, or OESubSearch object.
         :param adjustH: Match implicit/explicit hydrogen state between query and target molecule.
         :param mapidx: Annotate SMARTS map indexes on matches
         :returns: Boolean array.
         """
-        ss = oechem.OESubSearch(pattern) if isinstance(pattern, str) else pattern
+        if isinstance(pattern, str | oechem.OEQMol):
+            ss = oechem.OESubSearch(pattern)
+        elif isinstance(pattern, oechem.OESubSearch):
+            ss = pattern
+        else:
+            raise InvalidSMARTS(
+                f"Invalid substructure search pattern of type {type(pattern).__name__}; "
+                "expected SMARTS string, oechem.OEQMol, or oechem.OESubSearch."
+            )
 
         if not ss.IsValid():
             if isinstance(pattern, str):

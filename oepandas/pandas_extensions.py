@@ -1232,7 +1232,7 @@ class OEDataFrameAccessor:
     def substructure_search(
             self,
             column: str,
-            pattern: str | oechem.OESubSearch,
+            pattern: str | oechem.OEQMol | oechem.OESubSearch,
             *,
             adjustH: bool = False  # noqa
     ) -> pd.DataFrame:
@@ -1253,7 +1253,7 @@ class OEDataFrameAccessor:
     def substructure_filter(
             self,
             column: str,
-            pattern: str | oechem.OESubSearch,
+            pattern: str | oechem.OEQMol | oechem.OESubSearch,
             *,
             adjustH: bool = False  # noqa
     ) -> pd.DataFrame:
@@ -1901,7 +1901,7 @@ class OESeriesAccessor:
 
     def substructure_search(
             self,
-            pattern: str | oechem.OESubSearch,
+            pattern: str | oechem.OEQMol | oechem.OESubSearch,
             *,
             adjustH: bool = False  # noqa
     ) -> pd.Series:
@@ -1926,7 +1926,7 @@ class OESeriesAccessor:
 
     def substructure_filter(
             self,
-            pattern: str | oechem.OESubSearch,
+            pattern: str | oechem.OEQMol | oechem.OESubSearch,
             *,
             adjustH: bool = False  # noqa
     ) -> pd.Series:

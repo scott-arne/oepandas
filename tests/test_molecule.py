@@ -722,6 +722,19 @@ def test_molecule_array_substructure_search():
     assert len(sulfones) == 1
     assert sulfones[0] == 8
 
+def test_molecule_array_substructure_search_accepts_query_mol():
+    """
+    OEQMol query matching in a MoleculeArray.
+    """
+    mol = oechem.OEMol()
+    assert oechem.OEParseSmiles(mol, "CCO")
+    query = oechem.OEQMol()
+    assert oechem.OEParseSmarts(query, "[#6]-[#8]")
+
+    result = MoleculeArray([mol]).substructure_search(query)
+
+    assert result.tolist() == [True]
+
 def test_series_substructure_search():
     """
     SMARTS matching in a Pandas Series
@@ -730,6 +743,20 @@ def test_series_substructure_search():
     view = df[df.Molecule.chem.substructure_search("S(=O)=O")]
     assert len(view) == 1
     assert view.iloc[0].Title == 'Omeprazole'
+
+def test_series_substructure_search_accepts_query_mol():
+    """
+    OEQMol query matching through the Pandas Series accessor.
+    """
+    mol = oechem.OEMol()
+    assert oechem.OEParseSmiles(mol, "CCO")
+    query = oechem.OEQMol()
+    assert oechem.OEParseSmarts(query, "[#6]-[#8]")
+    series = pd.Series(MoleculeArray([mol]), dtype=MoleculeDtype())
+
+    result = series.chem.substructure_search(query)
+
+    assert result.tolist() == [True]
 
 def test_series_substructure_filter():
     """

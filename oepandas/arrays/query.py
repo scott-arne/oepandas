@@ -103,6 +103,46 @@ def _is_missing_query_value(value: object) -> bool:
     return False
 
 
+def _coerce_query_assignment(value: object) -> oechem.OEQMol | None:
+    """
+    Coerce a scalar assignment value into query-array storage.
+
+    :param value: Value assigned into a query array.
+    :returns: Query molecule or ``None``.
+    :raises TypeError: When the value cannot be represented as a query.
+    """
+    if isinstance(value, str):
+        query = _parse_query_string(value.strip(), QueryFormat.SMARTS)
+        if query is None:
+            raise TypeError(f"Cannot assign query from str: {value!r}")
+        return query
+
+    if isinstance(value, oechem.OEQMol):
+        return value
+
+    if isinstance(value, oechem.OEMolBase):
+        return oechem.OEQMol(value)
+
+    if _is_missing_query_value(value):
+        return None
+
+    raise TypeError(f"Cannot assign query from {type(value).__name__}")
+
+
+def _is_scalar_query_assignment(value: object) -> bool:
+    """
+    Check whether an assignment value should be broadcast as a scalar.
+
+    :param value: Assignment value.
+    :returns: ``True`` for scalar query assignment values.
+    """
+    if isinstance(value, str | oechem.OEMolBase):
+        return True
+    if _is_missing_query_value(value):
+        return True
+    return not isinstance(value, Iterable)
+
+
 class QueryArray(OEExtensionArray[oechem.OEQMol]):
     """
     Custom extension array for OpenEye query molecules.
@@ -259,6 +299,52 @@ class QueryArray(OEExtensionArray[oechem.OEQMol]):
     @property
     def dtype(self) -> PandasExtensionDtype:
         return QueryDtype()
+
+    def __setitem__(self, index, value) -> None:
+        """
+        Set one or more query items while preserving query dtype invariants.
+
+        :param index: Item index.
+        :param value: Query value or values to assign.
+        """
+        if isinstance(index, tuple):
+            if len(index) != 1:
+                raise IndexError(
+                    f"{type(self).__name__} only supports 1-D indexing, got tuple of length {len(index)}"
+                )
+            index = index[0]
+
+        if isinstance(index, (int, np.integer)):
+            self._objs[int(index)] = _coerce_query_assignment(value)
+            return
+
+        if isinstance(index, slice):
+            positions = list(range(*index.indices(len(self._objs))))
+        else:
+            idx_arr = np.asarray(index)
+            if idx_arr.dtype == bool:
+                if len(idx_arr) != len(self._objs):
+                    raise IndexError(
+                        f"Boolean index length {len(idx_arr)} does not match array length {len(self._objs)}"
+                    )
+                positions = [i for i, flag in enumerate(idx_arr) if flag]
+            else:
+                positions = [int(i) for i in idx_arr]
+
+        if _is_scalar_query_assignment(value):
+            query = _coerce_query_assignment(value)
+            for pos in positions:
+                self._objs[pos] = query
+            return
+
+        values = list(value)
+        if len(values) != len(positions):
+            raise ValueError(
+                f"Cannot assign {len(values)} values to {len(positions)} positions"
+            )
+
+        for pos, item in zip(positions, values, strict=True):
+            self._objs[pos] = _coerce_query_assignment(item)
 
     def deepcopy(self, metadata: bool | dict | None = True):
         """

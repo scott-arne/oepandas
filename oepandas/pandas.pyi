@@ -51,7 +51,7 @@ class Series(pd.Series[Any]):
     # noinspection PyPep8Naming
     def substructure_search(
         self,
-        pattern: str | oechem.OESubSearch,
+        pattern: str | oechem.OEQMol | oechem.OESubSearch,
         *,
         adjustH: bool = False
     ) -> pd.Series: ...
@@ -59,7 +59,7 @@ class Series(pd.Series[Any]):
     # noinspection PyPep8Naming
     def substructure_filter(
         self,
-        pattern: str | oechem.OESubSearch,
+        pattern: str | oechem.OEQMol | oechem.OESubSearch,
         *,
         adjustH: bool = False
     ) -> pd.Series: ...
@@ -141,7 +141,7 @@ class DataFrame(pd.DataFrame):
     def substructure_search(
         self,
         column: str,
-        pattern: str | oechem.OESubSearch,
+        pattern: str | oechem.OEQMol | oechem.OESubSearch,
         *,
         adjustH: bool = False
     ) -> pd.DataFrame: ...
@@ -150,7 +150,7 @@ class DataFrame(pd.DataFrame):
     def substructure_filter(
         self,
         column: str,
-        pattern: str | oechem.OESubSearch,
+        pattern: str | oechem.OEQMol | oechem.OESubSearch,
         *,
         adjustH: bool = False
     ) -> pd.DataFrame: ...
