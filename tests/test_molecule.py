@@ -10,6 +10,7 @@ from openeye import oechem
 
 import oepandas as oepd
 from oepandas import MoleculeArray, MoleculeDtype
+from oepandas.arrays.molecule import MoleculeType
 
 ASSETS = Path(Path(__file__).parent, "assets")
 
@@ -54,6 +55,52 @@ def test_create_simple(test_mols):
     """
     arr = MoleculeArray(copy_mols(test_mols))
     assert len(arr) == len(test_mols)
+
+def test_molecule_array_preserves_existing_molecule_class_by_default():
+    graph_mol = oechem.OEGraphMol()
+    assert oechem.OEParseSmiles(graph_mol, "CCO")
+
+    arr = MoleculeArray([graph_mol])
+
+    assert isinstance(arr[0], oechem.OEGraphMol)
+
+def test_molecule_array_from_strings_with_graph_mol_type():
+    arr = MoleculeArray.from_sequence_of_strings(
+        ["CCO", "CCC"],
+        molecule_type=MoleculeType.OEGRAPHMOL,
+    )
+
+    assert all(isinstance(mol, oechem.OEGraphMol) for mol in arr)
+    assert [oechem.OEMolToSmiles(mol) for mol in arr] == ["CCO", "CCC"]
+
+def test_molecule_array_from_sequence_casts_existing_molecules_when_requested():
+    mol = oechem.OEMol()
+    assert oechem.OEParseSmiles(mol, "CCO")
+
+    arr = MoleculeArray.from_sequence([mol], molecule_type="oegraphmol")
+
+    assert isinstance(arr[0], oechem.OEGraphMol)
+    assert oechem.OEMolToSmiles(arr[0]) == "CCO"
+
+def test_molecule_array_read_smi_honors_molecule_type():
+    arr = MoleculeArray.read_smi(Path(ASSETS, "10.smi"), molecule_type=oechem.OEGraphMol)
+
+    assert len(arr) == 10
+    assert all(isinstance(mol, oechem.OEGraphMol) for mol in arr)
+
+def test_molecule_array_read_smi_explicit_default_copies_stream_molecules():
+    arr = MoleculeArray.read_smi(Path(ASSETS, "10.smi"), molecule_type=MoleculeType.DEFAULT)
+    expected = MoleculeArray.read_smi(Path(ASSETS, "10.smi"))
+
+    assert len(arr) == 10
+    assert all(isinstance(mol, oechem.OEMol) and mol.IsValid() for mol in arr)
+    assert len({id(mol) for mol in arr}) == 10
+    assert arr.to_smiles().tolist() == expected.to_smiles().tolist()
+    assert all(smiles for smiles in arr.to_smiles())
+
+def test_molecule_array_rejects_invalid_molecule_type():
+    with pytest.raises(ValueError, match="Unsupported molecule_type"):
+        MoleculeArray.from_sequence_of_strings(["CCO"], molecule_type="smarts")
 
 def test_contains(test_mols):
     """

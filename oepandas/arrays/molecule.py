@@ -1,7 +1,8 @@
 import base64
 import logging
 from collections.abc import Generator, Iterable, Sequence
-from typing import Any, Literal, Self
+from enum import StrEnum
+from typing import Any, Literal, Self, TypeAlias
 
 import numpy as np
 import pandas as pd
@@ -29,6 +30,97 @@ log = logging.getLogger("oepandas")
 # Helpers
 ########################################################################################################################
 
+class MoleculeType(StrEnum):
+    """
+    Molecule implementation to use when constructing molecule arrays.
+    """
+
+    DEFAULT = "default"
+    OEMOL = "oemol"
+    OEGRAPHMOL = "oegraphmol"
+    OEQMOL = "oeqmol"
+
+
+MoleculeTypeInput: TypeAlias = MoleculeType | str | type[oechem.OEMolBase] | None
+
+_MOLECULE_CLASS_BY_TYPE: dict[MoleculeType, type[oechem.OEMolBase] | None] = {
+    MoleculeType.DEFAULT: None,
+    MoleculeType.OEMOL: oechem.OEMol,
+    MoleculeType.OEGRAPHMOL: oechem.OEGraphMol,
+    MoleculeType.OEQMOL: oechem.OEQMol,
+}
+
+_MOLECULE_TYPE_BY_CLASS: dict[type[oechem.OEMolBase], MoleculeType] = {
+    oechem.OEMol: MoleculeType.OEMOL,
+    oechem.OEGraphMol: MoleculeType.OEGRAPHMOL,
+    oechem.OEQMol: MoleculeType.OEQMOL,
+}
+
+_MOLECULE_TYPE_BY_STRING: dict[str, MoleculeType] = {
+    molecule_type.value: molecule_type for molecule_type in MoleculeType
+}
+
+
+def _normalize_molecule_type(molecule_type: MoleculeTypeInput) -> MoleculeType:
+    """
+    Normalize user molecule type input.
+
+    :param molecule_type: Molecule type selector.
+    :returns: Normalized molecule type.
+    :raises ValueError: When molecule type is unsupported.
+    """
+    if molecule_type is None:
+        return MoleculeType.DEFAULT
+
+    if isinstance(molecule_type, MoleculeType):
+        return molecule_type
+
+    if isinstance(molecule_type, str):
+        key = molecule_type.casefold().replace("-", "").replace("_", "").replace(" ", "")
+        if key in _MOLECULE_TYPE_BY_STRING:
+            return _MOLECULE_TYPE_BY_STRING[key]
+
+    if isinstance(molecule_type, type) and molecule_type in _MOLECULE_TYPE_BY_CLASS:
+        return _MOLECULE_TYPE_BY_CLASS[molecule_type]
+
+    raise ValueError(f"Unsupported molecule_type: {molecule_type!r}")
+
+
+def _molecule_class_for_type(molecule_type: MoleculeTypeInput) -> type[oechem.OEMolBase] | None:
+    """
+    Return the OpenEye molecule class for a molecule type selector.
+
+    :param molecule_type: Molecule type selector.
+    :returns: Molecule class, or ``None`` for the default preservation mode.
+    """
+    return _MOLECULE_CLASS_BY_TYPE[_normalize_molecule_type(molecule_type)]
+
+
+def _new_molecule(molecule_type: MoleculeTypeInput) -> oechem.OEMolBase:
+    """
+    Create a new molecule for the requested molecule type.
+
+    :param molecule_type: Molecule type selector.
+    :returns: New molecule instance.
+    """
+    molecule_cls = _molecule_class_for_type(molecule_type) or oechem.OEMol
+    return molecule_cls()
+
+
+def _coerce_molecule(mol: oechem.OEMolBase, molecule_type: MoleculeTypeInput) -> oechem.OEMolBase:
+    """
+    Coerce a molecule to the requested molecule type.
+
+    :param mol: Molecule to coerce.
+    :param molecule_type: Molecule type selector.
+    :returns: Coerced molecule, or the original molecule in default mode.
+    """
+    molecule_cls = _molecule_class_for_type(molecule_type)
+    if molecule_cls is None:
+        return mol
+    return molecule_cls(mol)
+
+
 def _has_data_and_is_not_blank(mol: oechem.OEMolBase, tag: str) -> bool:
     """
     Check if a molecue has data (SD or generic) and that it is not blank/None
@@ -55,7 +147,8 @@ def _read_molecules(
         flavor: int | None = None,
         conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default",
         gzip: bool = False,
-        no_title: bool = False
+        no_title: bool = False,
+        molecule_type: MoleculeTypeInput = None
 ) -> Generator[oechem.OEMolBase, None, None]:
     """
     Generator over flavored reading of molecules in a specific file format
@@ -81,10 +174,17 @@ def _read_molecules(
     :param conformer_test: OpenEye conformer testing method
     :param gzip: File is gzipped
     :param no_title: Remove titles
+    :param molecule_type: Molecule implementation for returned molecules
     :return: Generator over molecules
     """
     # noinspection PyTypeChecker
     fmt = get_oeformat(file_format, gzip=gzip or is_gz(fp))
+    normalized_molecule_type = _normalize_molecule_type(molecule_type)
+    read_molecule_type = (
+        MoleculeType.OEMOL
+        if normalized_molecule_type == MoleculeType.DEFAULT
+        else normalized_molecule_type
+    )
 
     with oechem.oemolistream(str(fp)) as ifs:
 
@@ -125,17 +225,17 @@ def _read_molecules(
             if no_title:
                 mol.SetTitle("")
                 mol.GetActive().SetTitle("")
-            yield oechem.OEMol(mol)
+            yield _coerce_molecule(mol, read_molecule_type)
 
 
 ########################################################################################################################
 # Molecule Array (for oechem.OEMol objects)
 ########################################################################################################################
 
-class MoleculeArray(OEExtensionArray[oechem.OEMol]):
+class MoleculeArray(OEExtensionArray[oechem.OEMolBase]):
 
     # For type checking in methods defined in OEExtensionArray
-    _base_openeye_type = oechem.OEMol
+    _base_openeye_type = oechem.OEMolBase
 
     """
     Custom extension for an array of molecules
@@ -145,14 +245,15 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
             mols: None | oechem.OEMolBase | Iterable[oechem.OEMolBase | None],
             copy: bool = False,
             metadata: dict | None = None,
-            deepcopy: bool = False
+            deepcopy: bool = False,
+            molecule_type: MoleculeTypeInput = None
     ):
         """
         Initialize
         :param mols: Molecule or an iterable of molecules
         :param copy: Create copy of the molecules if True
         """
-        # Under the hood we only work with oechem.OEMol for consistency
+        normalized_molecule_type = _normalize_molecule_type(molecule_type)
         processed = []
 
         if mols is not None:
@@ -167,12 +268,15 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
                 # Molecules
                 if isinstance(mol, oechem.OEMolBase):
 
-                    # Always store molecules as OEMol under-the-hood
-                    if deepcopy or isinstance(mol, oechem.OEGraphMol):
-                        processed.append(oechem.OEMol(mol))
+                    if normalized_molecule_type == MoleculeType.DEFAULT:
+                        # Preserve the concrete OpenEye molecule class unless an explicit type is requested.
+                        if deepcopy:
+                            processed.append(mol.CreateCopy())
+                        else:
+                            processed.append(mol)
 
                     else:
-                        processed.append(mol)
+                        processed.append(_coerce_molecule(mol, normalized_molecule_type))
 
                 # None/NaN values are allowed
                 elif pd.isna(mol):
@@ -205,14 +309,18 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
             dtype: Dtype | None = None,  # noqa
             copy: bool = False,
             molecule_format: str | int | None = None,
-            gzip: bool = False
+            gzip: bool = False,
+            molecule_type: MoleculeTypeInput = None
     ) -> Self:
         """
         Iniitialize from a sequence of scalar values
         :param scalars: Scalars
         :param copy: Copy the molecules (otherwise stores pointers)
+        :param molecule_type: Molecule implementation for parsed and existing molecules
         :return: New instance of Molecule Array
         """
+        normalized_molecule_type = _normalize_molecule_type(molecule_type)
+
         # Molecules
         mols = []
 
@@ -226,21 +334,18 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
                 mols.append(None)
 
             # Molecule subclasses
-            elif isinstance(obj, oechem.OEMol):
-                mols.append(obj)
-
-            elif isinstance(obj, oechem.OEGraphMol):
-                mols.append(oechem.OEMol(obj))
+            elif isinstance(obj, oechem.OEMolBase):
+                mols.append(_coerce_molecule(obj, normalized_molecule_type))
 
             elif isinstance(obj, bytes):
-                mol = oechem.OEMol()
+                mol = _new_molecule(normalized_molecule_type)
                 if not oechem.OEReadMolFromBytes(mol, fmt.oeformat, fmt.gzip, obj):
                     log.warning("Could read molecule %i from bytes using format '%s'", i + 1, fmt.name)
                 mols.append(mol)
 
             # Read from string
             elif isinstance(obj, str):
-                mol = oechem.OEMol()
+                mol = _new_molecule(normalized_molecule_type)
                 if not molecule_from_string(mol, obj, fmt):
                     log.warning("Could read molecule %i from string using format '%s'", i + 1, fmt.name)
                 mols.append(mol)
@@ -258,7 +363,8 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
             dtype: Dtype | None = None,  # noqa
             copy: bool = False,  # noqa
             molecule_format: int | str | None = None,
-            b64decode: bool = False) -> Self:
+            b64decode: bool = False,
+            molecule_type: MoleculeTypeInput = None) -> Self:
         """
         Read molecules form a sequence of strings (this is an optimization of _from_sequence, which does more
         type checking)
@@ -267,8 +373,11 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
         :param copy: Not used (here for API compatibility with Pandas)
         :param molecule_format: Molecule file format
         :param b64decode: Force base64 decoding of molecule strings
+        :param molecule_type: Molecule implementation for parsed molecules
         :return: Array of molecules
         """
+        normalized_molecule_type = _normalize_molecule_type(molecule_type)
+
         # Default format is SMILES
         molecule_format = molecule_format or oechem.OEFormat_SMI
 
@@ -278,7 +387,7 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
 
         mols = []
         for i, s in enumerate(strings):  # type: int, str
-            mol = oechem.OEMol()
+            mol = _new_molecule(normalized_molecule_type)
 
             if isinstance(s, str):
 
@@ -301,7 +410,8 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
             dtype: Dtype | None = None,
             copy: bool = False,
             molecule_format: int | str | None = None,
-            b64decode: bool = False
+            b64decode: bool = False,
+            molecule_type: MoleculeTypeInput = None
     ) -> Self:
         """
         Public alias of _from_sequence_of_strings
@@ -310,6 +420,7 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
         :param copy: Not used (here for API compatibility with Pandas)
         :param molecule_format: Molecule file format
         :param b64decode: Force base64 decoding of molecule strings
+        :param molecule_type: Molecule implementation for parsed molecules
         :return: Array of molecules
         """
         return cls._from_sequence_of_strings(
@@ -317,7 +428,8 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
             dtype=dtype,
             copy=copy,
             molecule_format=molecule_format,
-            b64decode=b64decode
+            b64decode=b64decode,
+            molecule_type=molecule_type
         )
 
     @classmethod
@@ -328,7 +440,8 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
             dtype: Dtype | None = None,
             copy: bool = False,
             molecule_format: str | int | None = None,
-            gzip: bool = False
+            gzip: bool = False,
+            molecule_type: MoleculeTypeInput = None
     ) -> Self:
         """
         Public alias of _from_sequence
@@ -337,6 +450,7 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
         :param copy: Not used (here for API compatibility with Pandas)
         :param molecule_format: Molecule file format
         :param gzip: Whether the objects are gzipped
+        :param molecule_type: Molecule implementation for parsed and existing molecules
         :return: Array of molecules
         """
         return cls._from_sequence(
@@ -344,7 +458,8 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
             dtype=dtype,
             copy=copy,
             molecule_format=molecule_format,
-            gzip=gzip
+            gzip=gzip,
+            molecule_type=molecule_type
         )
 
     @property
@@ -364,6 +479,7 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
             fp: FilePath,
             flavor: int | None = None,
             no_title: bool = False,
+            molecule_type: MoleculeTypeInput = None,
             **_
     ) -> Self:
         """
@@ -371,6 +487,7 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
         :param fp: Path to the SMILES file
         :param flavor: OpenEye input flavor
         :param no_title: If true, do not include title
+        :param molecule_type: Molecule implementation for parsed molecules
         :return: Molecule array populated by the molecules in the file
         """
         return cls(
@@ -378,7 +495,8 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
                 fp,
                 oechem.OEFormat_SMI,
                 flavor=flavor,
-                no_title=no_title
+                no_title=no_title,
+                molecule_type=molecule_type
             )
         )
 
@@ -388,7 +506,8 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
             fp: FilePath,
             flavor: int | None = None,
             conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default",
-            no_title: bool = False
+            no_title: bool = False,
+            molecule_type: MoleculeTypeInput = None
     ) -> Self:
         """
         Read molecules from an SD file and return an array
@@ -412,6 +531,7 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
         :param flavor: OpenEye input flavor
         :param conformer_test: Conformer testing
         :param no_title: If true, do not include title
+        :param molecule_type: Molecule implementation for parsed molecules
         :return: Molecule array populated by the molecules in the file
         """
         return cls(
@@ -420,7 +540,8 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
                 oechem.OEFormat_SDF,
                 flavor=flavor,
                 conformer_test=conformer_test,
-                no_title=no_title
+                no_title=no_title,
+                molecule_type=molecule_type
             )
         )
 
@@ -430,7 +551,8 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
             fp: FilePath,
             flavor: int | None = None,
             conformer_test: Literal["default", "absolute", "absolute_canonical", "isomeric", "omega"] = "default",
-            no_title: bool = False
+            no_title: bool = False,
+            molecule_type: MoleculeTypeInput = None
     ) -> Self:
         """
         Read molecules from an OEB file and return an array
@@ -454,6 +576,7 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
         :param flavor: OpenEye input flavor
         :param conformer_test: Conformer testing
         :param no_title: If true, do not include title
+        :param molecule_type: Molecule implementation for parsed molecules
         :return: Molecule array populated by the molecules in the file
         """
         return cls(
@@ -462,7 +585,8 @@ class MoleculeArray(OEExtensionArray[oechem.OEMol]):
                 oechem.OEFormat_OEB,
                 flavor=flavor,
                 conformer_test=conformer_test,
-                no_title=no_title
+                no_title=no_title,
+                molecule_type=molecule_type
             )
         )
 
@@ -653,7 +777,7 @@ class MoleculeDtype(PandasExtensionDtype):
     OpenEye molecule datatype for Pandas
     """
 
-    type: type = oechem.OEMol  # noqa
+    type: type = oechem.OEMolBase  # noqa
     name: str = "molecule"  # noqa
     kind: str = "O"
     base = np.dtype("O")
