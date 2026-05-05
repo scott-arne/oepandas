@@ -8,6 +8,9 @@ import numpy as np
 import pandas as pd
 from openeye import oechem
 
+from .arrays.molecule import MoleculeTypeInput
+from .arrays.query import QueryFormatInput
+
 # Monkey patch pandas classes with type hints for our accessors
 module = pd
 
@@ -18,7 +21,14 @@ class Series(pd.Series[Any]):
     def as_molecule(
         self,
         *,
-        molecule_format: str | int | None = None
+        molecule_format: str | int | None = None,
+        molecule_type: MoleculeTypeInput = None
+    ) -> pd.Series: ...
+
+    def as_query(
+        self,
+        *,
+        query_format: QueryFormatInput = ...
     ) -> pd.Series: ...
 
     def to_molecule_strings(
@@ -68,6 +78,15 @@ class DataFrame(pd.DataFrame):
         *,
         inplace: bool = False,
         molecule_format: str | int | None = None,
+        molecule_type: MoleculeTypeInput = None,
+    ) -> pd.DataFrame | None: ...
+
+    def as_query(
+        self,
+        columns: str | list[str],
+        *,
+        inplace: bool = False,
+        query_format: QueryFormatInput = ...,
     ) -> pd.DataFrame | None: ...
 
     def filter_invalid_molecules(
