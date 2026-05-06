@@ -502,6 +502,36 @@ class TestPandasAccessors:
         assert isinstance(result.dtypes["mol"], oepd.MoleculeDtype)
         assert all(isinstance(mol, oechem.OEGraphMol) for mol in result["mol"])
 
+    def test_series_as_molecule_no_title_clears_copy_not_source(self):
+        mol = oechem.OEMol()
+        assert oechem.OEParseSmiles(mol, "CCO")
+        mol.SetTitle("parent")
+        mol.GetActive().SetTitle("active")
+        mol_series = pd.Series(oepd.MoleculeArray([mol]), dtype=oepd.MoleculeDtype())
+
+        result = mol_series.chem.as_molecule(no_title=True)
+
+        assert result is not mol_series
+        assert result.iloc[0].GetTitle() == ""
+        assert result.iloc[0].GetActive().GetTitle() == ""
+        assert mol_series.iloc[0].GetTitle() == "parent"
+        assert mol_series.iloc[0].GetActive().GetTitle() == "active"
+
+    def test_dataframe_as_molecule_no_title_clears_existing_molecule_dtype(self):
+        mol = oechem.OEMol()
+        assert oechem.OEParseSmiles(mol, "CCO")
+        mol.SetTitle("parent")
+        mol.GetActive().SetTitle("active")
+        df = pd.DataFrame({"mol": pd.Series(oepd.MoleculeArray([mol]), dtype=oepd.MoleculeDtype())})
+
+        result = df.chem.as_molecule("mol", no_title=True)
+
+        assert result is not df
+        assert result.loc[0, "mol"].GetTitle() == ""
+        assert result.loc[0, "mol"].GetActive().GetTitle() == ""
+        assert df.loc[0, "mol"].GetTitle() == "parent"
+        assert df.loc[0, "mol"].GetActive().GetTitle() == "active"
+
     def test_series_as_query_from_smarts(self):
         query_series = pd.Series(["[#6]-[#8]"]).chem.as_query(query_format="smarts")
 
@@ -543,6 +573,30 @@ class TestPandasAccessors:
         result = query_series.chem.as_query()
 
         assert result is query_series
+
+    def test_series_as_query_no_title_clears_copy_not_source(self):
+        query = oechem.OEQMol()
+        assert oechem.OEParseSmarts(query, "[#6]")
+        query.SetTitle("query")
+        query_series = pd.Series(oepd.QueryArray([query]), dtype=oepd.QueryDtype())
+
+        result = query_series.chem.as_query(no_title=True)
+
+        assert result is not query_series
+        assert result.iloc[0].GetTitle() == ""
+        assert query_series.iloc[0].GetTitle() == "query"
+
+    def test_dataframe_as_query_no_title_clears_existing_query_dtype(self):
+        query = oechem.OEQMol()
+        assert oechem.OEParseSmarts(query, "[#6]")
+        query.SetTitle("query")
+        df = pd.DataFrame({"query": pd.Series(oepd.QueryArray([query]), dtype=oepd.QueryDtype())})
+
+        result = df.chem.as_query("query", no_title=True)
+
+        assert result is not df
+        assert result.loc[0, "query"].GetTitle() == ""
+        assert df.loc[0, "query"].GetTitle() == "query"
 
     def test_series_is_valid_supports_query_dtype(self):
         query_series = pd.Series(

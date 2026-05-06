@@ -22,13 +22,15 @@ class Series(pd.Series[Any]):
         self,
         *,
         molecule_format: str | int | None = None,
-        molecule_type: MoleculeTypeInput = None
+        molecule_type: MoleculeTypeInput = None,
+        no_title: bool = False,
     ) -> pd.Series: ...
 
     def as_query(
         self,
         *,
-        query_format: QueryFormatInput = ...
+        query_format: QueryFormatInput = ...,
+        no_title: bool = False,
     ) -> pd.Series: ...
 
     def to_molecule_strings(
@@ -66,8 +68,8 @@ class Series(pd.Series[Any]):
 
     # Design Unit-related accessors
     def copy_design_units(self) -> pd.Series: ...
-    def get_ligands(self) -> pd.Series: ...
-    def get_proteins(self) -> pd.Series: ...
+    def get_ligands(self, *, no_title: bool = False, clear_titles: bool | None = None) -> pd.Series: ...
+    def get_proteins(self, *, no_title: bool = False, clear_titles: bool | None = None) -> pd.Series: ...
     def get_components(self) -> pd.Series: ...
     def as_design_unit(self) -> pd.Series: ...
 
@@ -79,6 +81,7 @@ class DataFrame(pd.DataFrame):
         inplace: bool = False,
         molecule_format: str | int | None = None,
         molecule_type: MoleculeTypeInput = None,
+        no_title: bool = False,
     ) -> pd.DataFrame | None: ...
 
     def as_query(
@@ -87,6 +90,7 @@ class DataFrame(pd.DataFrame):
         *,
         inplace: bool = False,
         query_format: QueryFormatInput = ...,
+        no_title: bool = False,
     ) -> pd.DataFrame | None: ...
 
     def filter_invalid_molecules(

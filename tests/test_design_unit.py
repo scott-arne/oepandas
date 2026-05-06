@@ -66,6 +66,37 @@ def test_get_ligand(test_design_units):
 
     assert df.Ligand_SMILES.tolist() == expected
 
+def test_get_ligand_no_title(test_design_units):
+    """
+    Get ligand from design unit with titles cleared.
+    """
+    df = pd.DataFrame({"Design_Unit": pd.Series(copy_test_design_units(test_design_units), dtype=DesignUnitDtype())})
+
+    ligands = df["Design_Unit"].chem.get_ligands(no_title=True)
+
+    assert [lig.GetTitle() for lig in ligands] == ["", ""]
+    assert [lig.GetActive().GetTitle() for lig in ligands] == ["", ""]
+
+def test_get_ligand_clear_titles_alias(test_design_units):
+    """
+    clear_titles remains a compatibility alias for no_title.
+    """
+    df = pd.DataFrame({"Design_Unit": pd.Series(copy_test_design_units(test_design_units), dtype=DesignUnitDtype())})
+
+    ligands = df["Design_Unit"].chem.get_ligands(clear_titles=True)
+
+    assert [lig.GetTitle() for lig in ligands] == ["", ""]
+    assert [lig.GetActive().GetTitle() for lig in ligands] == ["", ""]
+
+def test_get_ligand_conflicting_title_options(test_design_units):
+    """
+    Conflicting title-clearing options are rejected.
+    """
+    df = pd.DataFrame({"Design_Unit": pd.Series(copy_test_design_units(test_design_units), dtype=DesignUnitDtype())})
+
+    with pytest.raises(ValueError, match="clear_titles"):
+        df["Design_Unit"].chem.get_ligands(no_title=True, clear_titles=False)
+
 def test_get_protein(test_design_units):
     """
     Get protein from design unit
@@ -99,4 +130,3 @@ def test_dataframe_as_design_unit(test_design_units):
     # Convert to design unit
     df.chem.as_design_unit(columns=["Design_Unit"], inplace=True)
     assert isinstance(df.dtypes["Design_Unit"], DesignUnitDtype)
-

@@ -220,61 +220,81 @@ class Dataset:
 def _series_to_molecule_array(
         series: pd.Series,
         molecule_format: int = oechem.OEFormat_SMI,
-        molecule_type: MoleculeTypeInput = None
+        molecule_type: MoleculeTypeInput = None,
+        no_title: bool = False
 ) -> MoleculeArray:
     """
     Convert a series to a molecule array
     :param series: Pandas Series
     :param molecule_format: Molecule format for string or byte values
     :param molecule_type: Molecule implementation for parsed and existing molecules
+    :param no_title: Clear molecule titles after conversion
     :return: Molecule array
     """
+    normalized_molecule_type = _normalize_molecule_type(molecule_type)
     mols = []
     for val in series:
 
         if isinstance(val, oechem.OEMolBase):
-            mols.append(_coerce_molecule(val, molecule_type))
+            if no_title and normalized_molecule_type == MoleculeType.DEFAULT:
+                mol = val.CreateCopy()
+            else:
+                mol = _coerce_molecule(val, normalized_molecule_type)
+            if no_title:
+                _clear_mol_titles(mol)
+            mols.append(mol)
 
         elif pd.isna(val):
             mols.append(None)
 
         elif molecule_format == oechem.OEFormat_SMI:
             if isinstance(val, str):
-                m = _new_molecule(molecule_type)
+                m = _new_molecule(normalized_molecule_type)
 
                 if not oechem.OEParseSmiles(m, val):
                     log.warning("Failed to parse SMILES in series: %s", val)
                     mols.append(None)
 
                 else:
+                    if no_title:
+                        _clear_mol_titles(m)
                     mols.append(m)
             else:
                 raise TypeError(f'Can only parse SMILES from str, but got type "{type(val).__name__}"')
 
         else:
-            m = _new_molecule(molecule_type)
+            m = _new_molecule(normalized_molecule_type)
             if not oechem.OEReadMolFromBytes(m, molecule_format, False, val):
                 log.warning("Failed to read molecule in series: %s", str(val))
                 mols.append(None)
 
             else:
+                if no_title:
+                    _clear_mol_titles(m)
                 mols.append(m)
 
-    return MoleculeArray(mols, molecule_type=molecule_type)
+    return MoleculeArray(mols, molecule_type=normalized_molecule_type)
 
 
 def _series_to_query_array(
         series: pd.Series,
-        query_format: QueryFormatInput = QueryFormat.SMARTS
+        query_format: QueryFormatInput = QueryFormat.SMARTS,
+        no_title: bool = False
 ) -> QueryArray:
     """
     Convert a series to a query array.
 
     :param series: Pandas Series.
     :param query_format: Query string format.
+    :param no_title: Clear query titles after conversion.
     :returns: Query array.
     """
-    return QueryArray.from_sequence(series, query_format=query_format)
+    arr = QueryArray.from_sequence(series, query_format=query_format, copy=no_title)
+    if no_title:
+        for query in arr:
+            if query is not None:
+                _clear_mol_titles(query)
+    return arr
 
 
 def _clear_mol_titles(mol: oechem.OEMolBase) -> None:
@@ -1108,6 +1128,7 @@ class OEDataFrameAccessor:
             *,
             molecule_format: str | int | None = None,
             molecule_type: MoleculeTypeInput = None,
+            no_title: bool = False,
             inplace: bool = False
     ) -> pd.DataFrame:
         """
@@ -1115,6 +1136,7 @@ class OEDataFrameAccessor:
         :param columns: Column name(s) to convert
         :param molecule_format: File format for parsing (default: SMILES)
         :param molecule_type: Molecule implementation for parsed and existing molecules
+        :param no_title: Clear molecule titles after conversion
         :param inplace: Modify DataFrame in place
         :return: DataFrame with converted columns
         """
@@ -1135,6 +1157,7 @@ class OEDataFrameAccessor:
             if (
                 not isinstance(self._obj[col].dtype, MoleculeDtype)
                 or normalized_molecule_type != MoleculeType.DEFAULT
+                or no_title
             )
         ]
 
@@ -1150,7 +1173,8 @@ class OEDataFrameAccessor:
                 _series_to_molecule_array(
                     df[col],
                     molecule_format=fmt,
-                    molecule_type=normalized_molecule_type
+                    molecule_type=normalized_molecule_type,
+                    no_title=no_title
                 ),
                 index=df.index,
                 dtype=MoleculeDtype()
@@ -1163,6 +1187,7 @@ class OEDataFrameAccessor:
             columns: str | Iterable[str],
             *,
             query_format: QueryFormatInput = QueryFormat.SMARTS,
+            no_title: bool = False,
             inplace: bool = False
     ) -> pd.DataFrame:
         """
@@ -1170,6 +1195,7 @@ class OEDataFrameAccessor:
 
         :param columns: Column name(s) to convert.
         :param query_format: Query string format.
+        :param no_title: Clear query titles after conversion.
         :param inplace: Modify DataFrame in place.
         :returns: DataFrame with converted columns.
         """
@@ -1179,7 +1205,7 @@ class OEDataFrameAccessor:
             if name not in self._obj.columns:
                 raise KeyError(f'Column {name} not found in DataFrame: {", ".join(self._obj.columns)}')
 
-        to_convert = [col for col in columns if not isinstance(self._obj[col].dtype, QueryDtype)]
+        to_convert = [col for col in columns if no_title or not isinstance(self._obj[col].dtype, QueryDtype)]
 
         if not inplace:
             df = self._obj
@@ -1190,7 +1216,7 @@ class OEDataFrameAccessor:
 
         for col in to_convert:
             df[col] = pd.Series(
-                _series_to_query_array(df[col], query_format=query_format),
+                _series_to_query_array(df[col], query_format=query_format, no_title=no_title),
                 index=df.index,
                 dtype=QueryDtype()
             )
@@ -1768,11 +1794,13 @@ class OESeriesAccessor:
             *,
             molecule_format: str | int | None = None,
             molecule_type: MoleculeTypeInput = None,
+            no_title: bool = False,
     ) -> pd.Series:
         """
         Convert a series to molecules.
         :param molecule_format: File format of column to convert to molecules
         :param molecule_type: Molecule implementation for parsed and existing molecules
+        :param no_title: Clear molecule titles after conversion
         :return: Series as molecule
         """
         normalized_molecule_type = _normalize_molecule_type(molecule_type)
@@ -1780,6 +1808,7 @@ class OESeriesAccessor:
         if (
                 isinstance(self._obj.dtype, MoleculeDtype)
                 and normalized_molecule_type == MoleculeType.DEFAULT
+                and not no_title
         ):
             return self._obj
 
@@ -1787,7 +1816,8 @@ class OESeriesAccessor:
         arr = _series_to_molecule_array(
             self._obj,
             molecule_format=fmt,
-            molecule_type=normalized_molecule_type
+            molecule_type=normalized_molecule_type,
+            no_title=no_title
         )
         return pd.Series(arr, index=self._obj.index, dtype=MoleculeDtype())
 
@@ -1795,17 +1825,19 @@ class OESeriesAccessor:
             self,
             *,
             query_format: QueryFormatInput = QueryFormat.SMARTS,
+            no_title: bool = False,
     ) -> pd.Series:
         """
         Convert a series to queries.
 
         :param query_format: Query string format.
+        :param no_title: Clear query titles after conversion.
         :returns: Series as query.
         """
-        if isinstance(self._obj.dtype, QueryDtype):
+        if isinstance(self._obj.dtype, QueryDtype) and not no_title:
             return self._obj
 
-        arr = _series_to_query_array(self._obj, query_format=query_format)
+        arr = _series_to_query_array(self._obj, query_format=query_format, no_title=no_title)
         return pd.Series(arr, index=self._obj.index, dtype=QueryDtype())
 
     def to_molecule(
@@ -2046,10 +2078,11 @@ class OESeriesAccessor:
 
         return pd.Series(cast(DesignUnitArray, self._obj.array).deepcopy(), dtype=DesignUnitDtype())
 
-    def get_ligands(self, *, clear_titles: bool = False) -> pd.Series:
+    def get_ligands(self, *, no_title: bool = False, clear_titles: bool | None = None) -> pd.Series:
         """
         Get ligands from design units.
-        :param clear_titles: Clear ligand titles
+        :param no_title: Clear ligand titles
+        :param clear_titles: Backward-compatible alias for no_title
         :return: Molecule series with ligands
         """
         if not isinstance(self._obj.dtype, DesignUnitDtype):
@@ -2058,13 +2091,17 @@ class OESeriesAccessor:
                 "design units, use series.chem.as_design_unit() to convert to a design unit column first."
             )
 
-        arr = cast(DesignUnitArray, self._obj.array).get_ligands(clear_titles=clear_titles)
+        arr = cast(DesignUnitArray, self._obj.array).get_ligands(
+            no_title=no_title,
+            clear_titles=clear_titles
+        )
         return pd.Series(arr, dtype=MoleculeDtype())
 
-    def get_proteins(self, *, clear_titles: bool = False) -> pd.Series:
+    def get_proteins(self, *, no_title: bool = False, clear_titles: bool | None = None) -> pd.Series:
         """
         Get proteins from design units.
-        :param clear_titles: Clear protein titles
+        :param no_title: Clear protein titles
+        :param clear_titles: Backward-compatible alias for no_title
         :return: Molecule series with proteins
         """
         if not isinstance(self._obj.dtype, DesignUnitDtype):
@@ -2073,7 +2110,10 @@ class OESeriesAccessor:
                 "design units, use series.chem.as_design_unit() to convert to a design unit column first."
             )
 
-        arr = cast(DesignUnitArray, self._obj.array).get_proteins(clear_titles=clear_titles)
+        arr = cast(DesignUnitArray, self._obj.array).get_proteins(
+            no_title=no_title,
+            clear_titles=clear_titles
+        )
         return pd.Series(arr, dtype=MoleculeDtype())
 
     def get_components(self, mask: int) -> pd.Series:
