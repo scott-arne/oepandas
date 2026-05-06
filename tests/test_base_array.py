@@ -271,6 +271,18 @@ class TestOEExtensionArrayBase:
         assert arr[1] is None
         assert arr[2] is None
 
+    def test_molecule_array_ne_returns_elementwise_identity_inequality(self, test_molecules):
+        """Test __ne__ mirrors object-identity inequality."""
+        arr = MoleculeArray(test_molecules[:2])
+
+        same_objects = MoleculeArray(test_molecules[:2])
+        reversed_objects = MoleculeArray(list(reversed(test_molecules[:2])))
+
+        assert (arr != same_objects).tolist() == [False, False]
+        assert (arr != reversed_objects).tolist() == [True, True]
+        assert (arr != test_molecules[:2]).tolist() == [False, False]
+        assert (arr != list(reversed(test_molecules[:2]))).tolist() == [True, True]
+
     def test_molecule_array_dataframe_loc_assignment(self, test_molecules):
         """Test df.loc[...] = value assignment path (which wraps the column indexer
         as a single-element tuple internally)."""

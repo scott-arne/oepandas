@@ -101,7 +101,7 @@ def create_molecule_to_bytes_writer(
     """
     if isinstance(fmt, str) and fmt in ("smiles", "canonical smiles", "canonical_smiles"):
 
-        def molecule_to_bytes(m: oechem.OEMolBase):
+        def canonical_molecule_to_bytes(m: oechem.OEMolBase):
             """
             Provides access to a simpler version of a SMILES writer that does not add the title
             """
@@ -110,7 +110,7 @@ def create_molecule_to_bytes_writer(
                 return base64.b64encode(python_gzip.compress(retval))  # retval is already bytes
             return retval
 
-        return molecule_to_bytes
+        return canonical_molecule_to_bytes
 
     if isinstance(fmt, (str, int)):
         # Get the molecule format
@@ -118,7 +118,7 @@ def create_molecule_to_bytes_writer(
 
     if isinstance(fmt, FileFormat):
 
-        def molecule_to_bytes(m: oechem.OEMolBase):
+        def formatted_molecule_to_bytes(m: oechem.OEMolBase):
             """
             Write to standard molecule formats
             """
@@ -129,7 +129,7 @@ def create_molecule_to_bytes_writer(
                 m
             )
 
-        return molecule_to_bytes
+        return formatted_molecule_to_bytes
 
     raise TypeError(f'Cannot create a molecule_to_bytes writer from: {fmt}')
 
@@ -246,5 +246,5 @@ def predominant_type(series: pd.Series, sample_size: int = 25) -> None | type:
     members = [type(x) for x in non_null_series.sample(n=sample_n)]
     if len(members) > 0:
         counts = Counter(members)
-        return max(counts, key=counts.get)
+        return counts.most_common(1)[0][0]
     return None

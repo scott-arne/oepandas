@@ -1,7 +1,11 @@
 # Created by .gitignore support plugin (hsz.mobi)
 
 .idea
+.vscode
 docs/plans
+docs/superpowers
+docs/specs
+.superpowers
 .ipynb_checkpoints
 
 ### Python template

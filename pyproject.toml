@@ -100,6 +100,51 @@ filterwarnings = [
 
 
 # ----------------------------------------------------------------------------------------
+# Pyright configuration (editor type checking)
+# https://microsoft.github.io/pyright/#/configuration
+# ----------------------------------------------------------------------------------------
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+include = [
+    "oepandas",
+    "tasks.py",
+]
+exclude = [
+    "**/__pycache__",
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".vscode",
+    "build",
+    "dist",
+    "docs",
+    "examples",
+    "htmlcov",
+    "oepandas.egg-info",
+    "tests",
+]
+
+# The OpenEye bindings are SWIG-backed and pandas extension arrays deliberately
+# use dynamic hooks that pandas-stubs cannot fully express. Mypy and runtime
+# tests are the authoritative gates here; keep Pylance from surfacing routine
+# integration friction as editor problems.
+reportArgumentType = "none"
+reportAttributeAccessIssue = "none"
+reportCallIssue = "none"
+reportGeneralTypeIssues = "none"
+reportIncompatibleMethodOverride = "none"
+reportIncompatibleVariableOverride = "none"
+reportInvalidTypeForm = "none"
+reportMissingImports = "none"
+reportMissingModuleSource = "none"
+reportOptionalMemberAccess = "none"
+reportRedeclaration = "none"
+
+
+# ----------------------------------------------------------------------------------------
 # Ruff configuration (linting and formatting)
 # https://docs.astral.sh/ruff/configuration/
 # ----------------------------------------------------------------------------------------

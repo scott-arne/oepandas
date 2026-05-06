@@ -14,6 +14,32 @@ from pandas.api.extensions import register_dataframe_accessor, register_series_a
 from pandas.api.types import is_float, is_integer, is_numeric_dtype
 from pandas.core.dtypes.dtypes import PandasExtensionDtype
 
+from .arrays import (
+    DesignUnitArray,
+    DesignUnitDtype,
+    FingerprintArray,
+    MoleculeArray,
+    MoleculeDtype,
+    MoleculeType,
+    QueryArray,
+    QueryDtype,
+    QueryFormat,
+)
+
+# noinspection PyProtectedMember
+from .arrays.molecule import (
+    MoleculeTypeInput,
+    _coerce_molecule,
+    _new_molecule,
+    _normalize_molecule_type,
+    _read_molecules,
+)
+from .arrays.query import QueryFormatInput
+from .exception import FileError
+from .util import create_molecule_to_string_writer, get_oeformat, is_gz, predominant_type
+
+log = logging.getLogger("oepandas")
+
 
 def _register_dataframe_accessor(name: str) -> Callable[[type], type]:
     """Register a DataFrame accessor, suppressing the override warning that
@@ -35,15 +61,6 @@ def _register_series_accessor(name: str) -> Callable[[type], type]:
             warnings.simplefilter("ignore", UserWarning)
             return register_series_accessor(name)(cls)
     return decorator
-
-from .arrays import DesignUnitArray, DesignUnitDtype, FingerprintArray, MoleculeArray, MoleculeDtype
-
-# noinspection PyProtectedMember
-from .arrays.molecule import _read_molecules
-from .exception import FileError
-from .util import create_molecule_to_string_writer, get_oeformat, is_gz, predominant_type
-
-log = logging.getLogger("oepandas")
 
 
 class MoleculeReaderOptions(TypedDict, total=False):
@@ -200,47 +217,84 @@ class Dataset:
         return key in self.columns
 
 
-def _series_to_molecule_array(series: pd.Series, molecule_format: int = oechem.OEFormat_SMI) -> MoleculeArray:
+def _series_to_molecule_array(
+        series: pd.Series,
+        molecule_format: int = oechem.OEFormat_SMI,
+        molecule_type: MoleculeTypeInput = None,
+        no_title: bool = False
+) -> MoleculeArray:
     """
     Convert a series to a molecule array
     :param series: Pandas Series
+    :param molecule_format: Molecule format for string or byte values
+    :param molecule_type: Molecule implementation for parsed and existing molecules
+    :param no_title: Clear molecule titles after conversion
     :return: Molecule array
     """
+    normalized_molecule_type = _normalize_molecule_type(molecule_type)
     mols = []
     for val in series:
 
-        if pd.isna(val):
-            mols.append(None)
-
-        elif isinstance(val, (oechem.OEGraphMol, oechem.OEMol)):
-            if isinstance(val, oechem.OEGraphMol):
-                mols.append(oechem.OEMol(val))
+        if isinstance(val, oechem.OEMolBase):
+            if no_title and normalized_molecule_type == MoleculeType.DEFAULT:
+                mol = val.CreateCopy()
             else:
-                mols.append(val)
+                mol = _coerce_molecule(val, normalized_molecule_type)
+            if no_title:
+                _clear_mol_titles(mol)
+            mols.append(mol)
+
+        elif pd.isna(val):
+            mols.append(None)
 
         elif molecule_format == oechem.OEFormat_SMI:
             if isinstance(val, str):
-                m = oechem.OEMol()
+                m = _new_molecule(normalized_molecule_type)
 
                 if not oechem.OEParseSmiles(m, val):
                     log.warning("Failed to parse SMILES in series: %s", val)
                     mols.append(None)
 
                 else:
+                    if no_title:
+                        _clear_mol_titles(m)
                     mols.append(m)
             else:
                 raise TypeError(f'Can only parse SMILES from str, but got type "{type(val).__name__}"')
 
         else:
-            m = oechem.OEMol()
+            m = _new_molecule(normalized_molecule_type)
             if not oechem.OEReadMolFromBytes(m, molecule_format, False, val):
                 log.warning("Failed to read molecule in series: %s", str(val))
                 mols.append(None)
 
             else:
+                if no_title:
+                    _clear_mol_titles(m)
                 mols.append(m)
 
-    return MoleculeArray(mols)
+    return MoleculeArray(mols, molecule_type=normalized_molecule_type)
+
+
+def _series_to_query_array(
+        series: pd.Series,
+        query_format: QueryFormatInput = QueryFormat.SMARTS,
+        no_title: bool = False
+) -> QueryArray:
+    """
+    Convert a series to a query array.
+
+    :param series: Pandas Series.
+    :param query_format: Query string format.
+    :param no_title: Clear query titles after conversion.
+    :returns: Query array.
+    """
+    arr = QueryArray.from_sequence(series, query_format=query_format, copy=no_title)
+    if no_title:
+        for query in arr:
+            if query is not None:
+                _clear_mol_titles(query)
+    return arr
 
 
 def _clear_mol_titles(mol: oechem.OEMolBase) -> None:
@@ -467,8 +521,11 @@ def _read_molecules_to_dataframe(
     if expand_confs:
         confs = []
         conf_idx = []
-        for mol in mols:  # type: oechem.OEMol
-            for conf in mol.GetConfs():  # type: oechem.OEConfBase
+        for mol in mols:
+            if mol is None:
+                continue
+
+            for conf in mol.GetConfs():
                 confs.append(oechem.OEMol(conf))
                 conf_idx.append(conf.GetIdx())
 
@@ -1073,12 +1130,16 @@ class OEDataFrameAccessor:
             columns: str | Iterable[str],
             *,
             molecule_format: str | int | None = None,
+            molecule_type: MoleculeTypeInput = None,
+            no_title: bool = False,
             inplace: bool = False
     ) -> pd.DataFrame:
         """
         Convert column(s) to MoleculeDtype.
         :param columns: Column name(s) to convert
         :param molecule_format: File format for parsing (default: SMILES)
+        :param molecule_type: Molecule implementation for parsed and existing molecules
+        :param no_title: Clear molecule titles after conversion
         :param inplace: Modify DataFrame in place
         :return: DataFrame with converted columns
         """
@@ -1086,6 +1147,7 @@ class OEDataFrameAccessor:
             oechem.OEFormat_SMI if molecule_format is None
             else (molecule_format if isinstance(molecule_format, int) else get_oeformat(molecule_format).oeformat)
         )
+        normalized_molecule_type = _normalize_molecule_type(molecule_type)
 
         columns = [columns] if isinstance(columns, str) else list(columns)
 
@@ -1093,7 +1155,14 @@ class OEDataFrameAccessor:
             if name not in self._obj.columns:
                 raise KeyError(f'Column {name} not found in DataFrame: {", ".join(self._obj.columns)}')
 
-        to_convert = [col for col in columns if not isinstance(self._obj[col].dtype, MoleculeDtype)]
+        to_convert = [
+            col for col in columns
+            if (
+                not isinstance(self._obj[col].dtype, MoleculeDtype)
+                or normalized_molecule_type != MoleculeType.DEFAULT
+                or no_title
+            )
+        ]
 
         if not inplace:
             df = self._obj
@@ -1102,16 +1171,58 @@ class OEDataFrameAccessor:
         else:
             df = self._obj
 
-        for col in columns:
-            if not isinstance(df[col].dtype, MoleculeDtype):
-                df[col] = pd.Series(
-                    _series_to_molecule_array(
-                        df[col],
-                        molecule_format=fmt
-                    ),
-                    index=df.index,
-                    dtype=MoleculeDtype()
-                )
+        for col in to_convert:
+            df[col] = pd.Series(
+                _series_to_molecule_array(
+                    df[col],
+                    molecule_format=fmt,
+                    molecule_type=normalized_molecule_type,
+                    no_title=no_title
+                ),
+                index=df.index,
+                dtype=MoleculeDtype()
+            )
+
+        return df
+
+    def as_query(
+            self,
+            columns: str | Iterable[str],
+            *,
+            query_format: QueryFormatInput = QueryFormat.SMARTS,
+            no_title: bool = False,
+            inplace: bool = False
+    ) -> pd.DataFrame:
+        """
+        Convert column(s) to QueryDtype.
+
+        :param columns: Column name(s) to convert.
+        :param query_format: Query string format.
+        :param no_title: Clear query titles after conversion.
+        :param inplace: Modify DataFrame in place.
+        :returns: DataFrame with converted columns.
+        """
+        columns = [columns] if isinstance(columns, str) else list(columns)
+
+        for name in columns:
+            if name not in self._obj.columns:
+                raise KeyError(f'Column {name} not found in DataFrame: {", ".join(self._obj.columns)}')
+
+        to_convert = [col for col in columns if no_title or not isinstance(self._obj[col].dtype, QueryDtype)]
+
+        if not inplace:
+            df = self._obj
+            if to_convert:
+                df = self._obj.copy()
+        else:
+            df = self._obj
+
+        for col in to_convert:
+            df[col] = pd.Series(
+                _series_to_query_array(df[col], query_format=query_format, no_title=no_title),
+                index=df.index,
+                dtype=QueryDtype()
+            )
 
         return df
 
@@ -1150,7 +1261,7 @@ class OEDataFrameAccessor:
     def substructure_search(
             self,
             column: str,
-            pattern: str | oechem.OESubSearch,
+            pattern: str | oechem.OEQMol | oechem.OESubSearch,
             *,
             adjustH: bool = False  # noqa
     ) -> pd.DataFrame:
@@ -1171,7 +1282,7 @@ class OEDataFrameAccessor:
     def substructure_filter(
             self,
             column: str,
-            pattern: str | oechem.OESubSearch,
+            pattern: str | oechem.OEQMol | oechem.OESubSearch,
             *,
             adjustH: bool = False  # noqa
     ) -> pd.DataFrame:
@@ -1667,31 +1778,70 @@ class OESeriesAccessor:
 
     def is_valid(self) -> pd.Series:
         """
-        Return a boolean series indicating whether each molecule is valid.
+        Return a boolean series indicating whether each molecule or query is valid.
         :return: Boolean series
         """
-        if not isinstance(self._obj.dtype, MoleculeDtype):
+        if isinstance(self._obj.dtype, MoleculeDtype):
+            valid = cast(MoleculeArray, self._obj.array).valid()
+        elif isinstance(self._obj.dtype, QueryDtype):
+            valid = cast(QueryArray, self._obj.array).valid()
+        else:
             raise TypeError(
-                "is_valid only works on molecule columns (oepandas.MoleculeDtype)."
+                "is_valid only works on molecule or query columns "
+                "(oepandas.MoleculeDtype or oepandas.QueryDtype)."
             )
-        return pd.Series(cast(MoleculeArray, self._obj.array).valid(), index=self._obj.index)
+        return pd.Series(valid, index=self._obj.index)
 
     def as_molecule(
             self,
             *,
             molecule_format: str | int | None = None,
+            molecule_type: MoleculeTypeInput = None,
+            no_title: bool = False,
     ) -> pd.Series:
         """
         Convert a series to molecules.
         :param molecule_format: File format of column to convert to molecules
+        :param molecule_type: Molecule implementation for parsed and existing molecules
+        :param no_title: Clear molecule titles after conversion
         :return: Series as molecule
         """
-        if isinstance(self._obj.dtype, MoleculeDtype):
+        normalized_molecule_type = _normalize_molecule_type(molecule_type)
+
+        if (
+                isinstance(self._obj.dtype, MoleculeDtype)
+                and normalized_molecule_type == MoleculeType.DEFAULT
+                and not no_title
+        ):
             return self._obj
 
         fmt = get_oeformat(molecule_format or oechem.OEFormat_SMI, gzip=False).oeformat
-        arr = _series_to_molecule_array(self._obj, molecule_format=fmt)
+        arr = _series_to_molecule_array(
+            self._obj,
+            molecule_format=fmt,
+            molecule_type=normalized_molecule_type,
+            no_title=no_title
+        )
         return pd.Series(arr, index=self._obj.index, dtype=MoleculeDtype())
+
+    def as_query(
+            self,
+            *,
+            query_format: QueryFormatInput = QueryFormat.SMARTS,
+            no_title: bool = False,
+    ) -> pd.Series:
+        """
+        Convert a series to queries.
+
+        :param query_format: Query string format.
+        :param no_title: Clear query titles after conversion.
+        :returns: Series as query.
+        """
+        if isinstance(self._obj.dtype, QueryDtype) and not no_title:
+            return self._obj
+
+        arr = _series_to_query_array(self._obj, query_format=query_format, no_title=no_title)
+        return pd.Series(arr, index=self._obj.index, dtype=QueryDtype())
 
     def to_molecule(
             self,
@@ -1786,7 +1936,7 @@ class OESeriesAccessor:
 
     def substructure_search(
             self,
-            pattern: str | oechem.OESubSearch,
+            pattern: str | oechem.OEQMol | oechem.OESubSearch,
             *,
             adjustH: bool = False  # noqa
     ) -> pd.Series:
@@ -1811,7 +1961,7 @@ class OESeriesAccessor:
 
     def substructure_filter(
             self,
-            pattern: str | oechem.OESubSearch,
+            pattern: str | oechem.OEQMol | oechem.OESubSearch,
             *,
             adjustH: bool = False  # noqa
     ) -> pd.Series:
@@ -1931,10 +2081,11 @@ class OESeriesAccessor:
 
         return pd.Series(cast(DesignUnitArray, self._obj.array).deepcopy(), dtype=DesignUnitDtype())
 
-    def get_ligands(self, *, clear_titles: bool = False) -> pd.Series:
+    def get_ligands(self, *, no_title: bool = False, clear_titles: bool | None = None) -> pd.Series:
         """
         Get ligands from design units.
-        :param clear_titles: Clear ligand titles
+        :param no_title: Clear ligand titles
+        :param clear_titles: Backward-compatible alias for no_title
         :return: Molecule series with ligands
         """
         if not isinstance(self._obj.dtype, DesignUnitDtype):
@@ -1943,13 +2094,17 @@ class OESeriesAccessor:
                 "design units, use series.chem.as_design_unit() to convert to a design unit column first."
             )
 
-        arr = cast(DesignUnitArray, self._obj.array).get_ligands(clear_titles=clear_titles)
+        arr = cast(DesignUnitArray, self._obj.array).get_ligands(
+            no_title=no_title,
+            clear_titles=clear_titles
+        )
         return pd.Series(arr, dtype=MoleculeDtype())
 
-    def get_proteins(self, *, clear_titles: bool = False) -> pd.Series:
+    def get_proteins(self, *, no_title: bool = False, clear_titles: bool | None = None) -> pd.Series:
         """
         Get proteins from design units.
-        :param clear_titles: Clear protein titles
+        :param no_title: Clear protein titles
+        :param clear_titles: Backward-compatible alias for no_title
         :return: Molecule series with proteins
         """
         if not isinstance(self._obj.dtype, DesignUnitDtype):
@@ -1958,7 +2113,10 @@ class OESeriesAccessor:
                 "design units, use series.chem.as_design_unit() to convert to a design unit column first."
             )
 
-        arr = cast(DesignUnitArray, self._obj.array).get_proteins(clear_titles=clear_titles)
+        arr = cast(DesignUnitArray, self._obj.array).get_proteins(
+            no_title=no_title,
+            clear_titles=clear_titles
+        )
         return pd.Series(arr, dtype=MoleculeDtype())
 
     def get_components(self, mask: int) -> pd.Series:
@@ -2015,6 +2173,8 @@ def read_oedu(
 
     if no_title:
         for du in du_array:
+            if du is None:
+                continue
             du.SetTitle("")
 
     # Read data
@@ -2022,6 +2182,8 @@ def read_oedu(
     if generic_data:
         # Get the data and use indexes to assign data
         for idx, du in enumerate(du_array):
+            if du is None:
+                continue
             for diter in du.GetDataIter():
                 try:
                     tag = oechem.OEGetTag(diter.GetTag())
@@ -2033,7 +2195,7 @@ def read_oedu(
 
     return pd.DataFrame({
         design_unit_column: pd.Series(du_array, dtype=DesignUnitDtype()),
-        title_column: pd.Series([du.GetTitle() for du in du_array], dtype=str),
+        title_column: pd.Series([du.GetTitle() if du is not None else None for du in du_array], dtype=str),
         **data.to_series_dict()
     })
 

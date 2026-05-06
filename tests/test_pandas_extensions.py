@@ -459,6 +459,155 @@ class TestPandasAccessors:
         # Should return the same series since it's already a molecule series
         assert result is mol_series
 
+    def test_series_as_molecule_with_graph_mol_type(self):
+        smiles_series = pd.Series(["CCO", "CCC"])
+
+        mol_series = smiles_series.chem.as_molecule(molecule_type=oepd.MoleculeType.OEGRAPHMOL)
+
+        assert isinstance(mol_series.dtype, oepd.MoleculeDtype)
+        assert all(isinstance(mol, oechem.OEGraphMol) for mol in mol_series)
+
+    def test_series_as_molecule_default_preserves_existing_type(self):
+        graph_mol = oechem.OEGraphMol()
+        assert oechem.OEParseSmiles(graph_mol, "CCO")
+
+        mol_series = pd.Series([graph_mol]).chem.as_molecule()
+
+        assert isinstance(mol_series.dtype, oepd.MoleculeDtype)
+        assert isinstance(mol_series.iloc[0], oechem.OEGraphMol)
+
+    def test_dataframe_as_molecule_with_graph_mol_type(self):
+        df = pd.DataFrame({"smiles": ["CCO", "CCC"]})
+
+        result = df.chem.as_molecule("smiles", molecule_type=oechem.OEGraphMol)
+
+        assert isinstance(result.dtypes["smiles"], oepd.MoleculeDtype)
+        assert all(isinstance(mol, oechem.OEGraphMol) for mol in result["smiles"])
+
+    def test_series_as_molecule_casts_existing_molecule_dtype_when_requested(self, test_molecules):
+        mol_series = pd.Series(oepd.MoleculeArray(test_molecules), dtype=oepd.MoleculeDtype())
+
+        result = mol_series.chem.as_molecule(molecule_type=oepd.MoleculeType.OEGRAPHMOL)
+
+        assert result is not mol_series
+        assert isinstance(result.dtype, oepd.MoleculeDtype)
+        assert all(isinstance(mol, oechem.OEGraphMol) for mol in result)
+
+    def test_dataframe_as_molecule_casts_existing_molecule_dtype_when_requested(self, test_molecules):
+        df = pd.DataFrame({"mol": pd.Series(oepd.MoleculeArray(test_molecules), dtype=oepd.MoleculeDtype())})
+
+        result = df.chem.as_molecule("mol", molecule_type=oepd.MoleculeType.OEGRAPHMOL)
+
+        assert result is not df
+        assert isinstance(result.dtypes["mol"], oepd.MoleculeDtype)
+        assert all(isinstance(mol, oechem.OEGraphMol) for mol in result["mol"])
+
+    def test_series_as_molecule_no_title_clears_copy_not_source(self):
+        mol = oechem.OEMol()
+        assert oechem.OEParseSmiles(mol, "CCO")
+        mol.SetTitle("parent")
+        mol.GetActive().SetTitle("active")
+        mol_series = pd.Series(oepd.MoleculeArray([mol]), dtype=oepd.MoleculeDtype())
+
+        result = mol_series.chem.as_molecule(no_title=True)
+
+        assert result is not mol_series
+        assert result.iloc[0].GetTitle() == ""
+        assert result.iloc[0].GetActive().GetTitle() == ""
+        assert mol_series.iloc[0].GetTitle() == "parent"
+        assert mol_series.iloc[0].GetActive().GetTitle() == "active"
+
+    def test_dataframe_as_molecule_no_title_clears_existing_molecule_dtype(self):
+        mol = oechem.OEMol()
+        assert oechem.OEParseSmiles(mol, "CCO")
+        mol.SetTitle("parent")
+        mol.GetActive().SetTitle("active")
+        df = pd.DataFrame({"mol": pd.Series(oepd.MoleculeArray([mol]), dtype=oepd.MoleculeDtype())})
+
+        result = df.chem.as_molecule("mol", no_title=True)
+
+        assert result is not df
+        assert result.loc[0, "mol"].GetTitle() == ""
+        assert result.loc[0, "mol"].GetActive().GetTitle() == ""
+        assert df.loc[0, "mol"].GetTitle() == "parent"
+        assert df.loc[0, "mol"].GetActive().GetTitle() == "active"
+
+    def test_series_as_query_from_smarts(self):
+        query_series = pd.Series(["[#6]-[#8]"]).chem.as_query(query_format="smarts")
+
+        assert isinstance(query_series.dtype, oepd.QueryDtype)
+        assert isinstance(query_series.iloc[0], oechem.OEQMol)
+        assert query_series.iloc[0].IsValid()
+
+    def test_series_as_query_from_smirks(self):
+        query_series = pd.Series(["[#6:1]-[#8:2]>>[#6:1]=[#8:2]"]).chem.as_query(
+            query_format=oepd.QueryFormat.SMIRKS
+        )
+
+        assert isinstance(query_series.dtype, oepd.QueryDtype)
+        assert isinstance(query_series.iloc[0], oechem.OEQMol)
+        assert query_series.iloc[0].IsValid()
+
+    def test_dataframe_as_query_from_smarts(self):
+        df = pd.DataFrame({"query": ["[#6]-[#8]"]})
+
+        result = df.chem.as_query("query", query_format="smarts")
+
+        assert isinstance(result.dtypes["query"], oepd.QueryDtype)
+        assert isinstance(result.loc[0, "query"], oechem.OEQMol)
+
+    def test_dataframe_as_query_inplace(self):
+        df = pd.DataFrame({"query": ["[#6]"]})
+
+        returned = df.chem.as_query("query", inplace=True)
+
+        assert returned is df
+        assert isinstance(df.dtypes["query"], oepd.QueryDtype)
+
+    def test_series_as_query_already_query_dtype_returns_same_series(self):
+        query_series = pd.Series(
+            oepd.QueryArray.from_sequence_of_strings(["[#6]"]),
+            dtype=oepd.QueryDtype(),
+        )
+
+        result = query_series.chem.as_query()
+
+        assert result is query_series
+
+    def test_series_as_query_no_title_clears_copy_not_source(self):
+        query = oechem.OEQMol()
+        assert oechem.OEParseSmarts(query, "[#6]")
+        query.SetTitle("query")
+        query_series = pd.Series(oepd.QueryArray([query]), dtype=oepd.QueryDtype())
+
+        result = query_series.chem.as_query(no_title=True)
+
+        assert result is not query_series
+        assert result.iloc[0].GetTitle() == ""
+        assert query_series.iloc[0].GetTitle() == "query"
+
+    def test_dataframe_as_query_no_title_clears_existing_query_dtype(self):
+        query = oechem.OEQMol()
+        assert oechem.OEParseSmarts(query, "[#6]")
+        query.SetTitle("query")
+        df = pd.DataFrame({"query": pd.Series(oepd.QueryArray([query]), dtype=oepd.QueryDtype())})
+
+        result = df.chem.as_query("query", no_title=True)
+
+        assert result is not df
+        assert result.loc[0, "query"].GetTitle() == ""
+        assert df.loc[0, "query"].GetTitle() == "query"
+
+    def test_series_is_valid_supports_query_dtype(self):
+        query_series = pd.Series(
+            oepd.QueryArray.from_sequence_of_strings(["[#6]"]),
+            dtype=oepd.QueryDtype(),
+        )
+
+        validity = query_series.chem.is_valid()
+
+        assert validity.tolist() == [True]
+
 
 class TestErrorHandling:
     """Test error handling in pandas extensions"""

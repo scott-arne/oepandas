@@ -46,6 +46,24 @@ def _read_oedus_from_directory(directory: Path) -> Generator[oechem.OEDesignUnit
         yield from _read_oedus_from_file(fp)
 
 
+def _resolve_no_title(no_title: bool, clear_titles: bool | None) -> bool:
+    """
+    Resolve the canonical ``no_title`` option and the legacy ``clear_titles`` alias.
+
+    :param no_title: Canonical title-clearing option.
+    :param clear_titles: Backward-compatible alias for ``no_title``.
+    :returns: Whether titles should be cleared.
+    :raises ValueError: When both options are supplied with conflicting values.
+    """
+    if clear_titles is None:
+        return no_title
+
+    if no_title and not clear_titles:
+        raise ValueError("clear_titles conflicts with no_title=True")
+
+    return clear_titles
+
+
 class DesignUnitArray(OEExtensionArray[oechem.OEDesignUnit]):
 
     # For type checking in methods defined in OEExtensionArray
@@ -188,41 +206,57 @@ class DesignUnitArray(OEExtensionArray[oechem.OEDesignUnit]):
         """
         mols = []
         for du in self:
+            if du is None:
+                mols.append(None)
+                continue
+
             mol = oechem.OEMol()
             du.GetComponents(mol, mask)
             mols.append(mol)
         return MoleculeArray(mols)
 
-    def get_ligands(self, *, clear_titles: bool = False) -> MoleculeArray:
+    def get_ligands(self, *, no_title: bool = False, clear_titles: bool | None = None) -> MoleculeArray:
         """
         Get a molecule array of just the ligands
-        :param clear_titles: Clear ligand titles
+        :param no_title: Clear ligand titles
+        :param clear_titles: Backward-compatible alias for no_title
         :return:  Molecule array of just ligands
         """
+        clear_title_values = _resolve_no_title(no_title, clear_titles)
         ligs = []
         for du in self:
+            if du is None:
+                ligs.append(None)
+                continue
+
             lig = oechem.OEMol()
             du.GetLigand(lig)
 
-            if clear_titles:
+            if clear_title_values:
                 lig.SetTitle('')
                 lig.GetActive().SetTitle('')
 
             ligs.append(lig)
         return MoleculeArray(ligs)
 
-    def get_proteins(self, *, clear_titles: bool = False) -> MoleculeArray:
+    def get_proteins(self, *, no_title: bool = False, clear_titles: bool | None = None) -> MoleculeArray:
         """
         Get a molecule array of just the proteins
-        :param clear_titles: Clear ligand titles
+        :param no_title: Clear protein titles
+        :param clear_titles: Backward-compatible alias for no_title
         :return: Molecule array of just proteins
         """
+        clear_title_values = _resolve_no_title(no_title, clear_titles)
         prots = []
         for du in self:
+            if du is None:
+                prots.append(None)
+                continue
+
             prot = oechem.OEMol()
             du.GetProtein(prot)
 
-            if clear_titles:
+            if clear_title_values:
                 prot.SetTitle('')
                 prot.GetActive().SetTitle('')
 
