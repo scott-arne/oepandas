@@ -5,9 +5,9 @@
 [![Pandas 2.2+](https://img.shields.io/badge/pandas-2.2+-orange.svg)](https://pandas.pydata.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Deep integration of OpenEye objects into Pandas DataFrames with native support for molecules and design units.
+Deep integration of OpenEye objects into Pandas DataFrames with native support for molecules, query molecules, and design units.
 
-OEPandas extends Pandas with custom extension arrays that store OpenEye `OEMol` and `OEDesignUnit` objects as first-class DataFrame column types. This enables seamless interoperability between OpenEye's cheminformatics capabilities and Pandas' data analysis workflows.
+OEPandas extends Pandas with custom extension arrays that store OpenEye `OEMolBase`, `OEQMol`, and `OEDesignUnit` objects as first-class DataFrame column types. This enables seamless interoperability between OpenEye's cheminformatics capabilities and Pandas' data analysis workflows.
 
 ---
 
@@ -18,6 +18,7 @@ OEPandas extends Pandas with custom extension arrays that store OpenEye `OEMol` 
 - [Basic Usage](#basic-usage)
   - [Reading Molecular Data](#reading-molecular-data)
   - [Working with Molecules](#working-with-molecules)
+  - [Working with Query Molecules](#working-with-query-molecules)
   - [Design Units](#design-units)
   - [Data Quality and Filtering](#data-quality-and-filtering)
 - [Writing Data](#writing-data)
@@ -146,6 +147,27 @@ df["MolCopy"] = df.Molecule.chem.copy_molecules()
 # Substructure searching with SMARTS
 has_carboxylic_acid = df.Molecule.chem.substructure_search("C(=O)O")
 df_acids = df[has_carboxylic_acid]
+
+# Choose a concrete OpenEye molecule class when converting
+df = df.chem.as_molecule("SMILES", molecule_type=oepd.MoleculeType.OEGRAPHMOL)
+```
+
+### Working with Query Molecules
+
+SMARTS and SMIRKS strings can be stored as `QueryDtype` columns backed by OpenEye `OEQMol` objects:
+
+```python
+import pandas as pd
+
+# Parse SMARTS strings into OEQMol query objects
+queries = pd.Series(["[#6]-[#8]", "[#7]"]).chem.as_query(query_format="smarts")
+
+# Parse a DataFrame column in place
+df.chem.as_query("SMARTS", inplace=True)
+
+# Query molecules can be passed directly to substructure search
+alcohol_query = queries.iloc[0]
+matches = df.Molecule.chem.substructure_search(alcohol_query)
 ```
 
 ### Design Units
@@ -244,7 +266,8 @@ oepd.read_sdf(
     usecols=None,
     numeric=None,
     conformer_test="default",
-    read_sd_data=True
+    read_sd_data=True,
+    no_title=False
 )
 ```
 
@@ -260,6 +283,7 @@ oepd.read_sdf(
 | `numeric` | str, list, dict | `None` | Columns to convert to numeric |
 | `conformer_test` | str | `"default"` | Conformer combining strategy: "default", "absolute", "absolute_canonical", "isomeric", "omega" |
 | `read_sd_data` | bool | `True` | Read SD data into columns |
+| `no_title` | bool | `False` | Clear molecule titles |
 
 #### `read_oeb()`
 
@@ -281,7 +305,8 @@ oepd.read_oeb(
     conformer_test="default",
     combine_tags="prefix",
     sd_prefix="SD Tag: ",
-    generic_prefix="Generic Tag: "
+    generic_prefix="Generic Tag: ",
+    no_title=False
 )
 ```
 
@@ -293,6 +318,7 @@ oepd.read_oeb(
 | `combine_tags` | str | `"prefix"` | Tag conflict resolution: "prefix", "prefer_sd", "prefer_generic" |
 | `sd_prefix` | str | `"SD Tag: "` | Prefix for SD data columns |
 | `generic_prefix` | str | `"Generic Tag: "` | Prefix for generic data columns |
+| `no_title` | bool | `False` | Clear molecule titles |
 
 *Other parameters same as `read_sdf()`*
 
@@ -311,7 +337,8 @@ oepd.read_smi(
     molecule_column="Molecule",
     title_column="Title",
     smiles_column_name="SMILES",
-    inchi_key_column_name="InChI Key"
+    inchi_key_column_name="InChI Key",
+    no_title=False
 )
 ```
 
@@ -326,6 +353,7 @@ oepd.read_smi(
 | `title_column` | str | `"Title"` | Name of title column |
 | `smiles_column_name` | str | `"SMILES"` | Name of SMILES column |
 | `inchi_key_column_name` | str | `"InChI Key"` | Name of InChI Key column |
+| `no_title` | bool | `False` | Clear molecule titles |
 
 #### `read_molecule_csv()`
 
@@ -337,6 +365,7 @@ oepd.read_molecule_csv(
     molecule_columns,
     *,
     add_smiles=None,
+    no_title=False,
     **kwargs
 )
 ```
@@ -346,6 +375,7 @@ oepd.read_molecule_csv(
 | `filepath_or_buffer` | str, Path, buffer | required | Path to CSV file |
 | `molecule_columns` | str, dict, "detect" | required | Column(s) containing molecules, or "detect" for auto-detection |
 | `add_smiles` | bool, str, list | `None` | Add SMILES column(s) |
+| `no_title` | bool | `False` | Clear molecule titles on converted molecule columns |
 | `**kwargs` | | | Additional arguments passed to `pd.read_csv()` |
 
 #### `read_oedb()`
@@ -377,7 +407,8 @@ oepd.read_oedu(
     *,
     design_unit_column="Design_Unit",
     title_column="Title",
-    generic_data=True
+    generic_data=True,
+    no_title=False
 )
 ```
 
@@ -387,6 +418,7 @@ oepd.read_oedu(
 | `design_unit_column` | str | `"Design_Unit"` | Name of design unit column |
 | `title_column` | str | `"Title"` | Name of title column |
 | `generic_data` | bool | `True` | Read generic data into columns |
+| `no_title` | bool | `False` | Clear design unit titles |
 
 ---
 
@@ -403,6 +435,8 @@ df.chem.as_molecule(
     columns,
     *,
     molecule_format=None,
+    molecule_type=None,
+    no_title=False,
     inplace=False
 )
 ```
@@ -411,6 +445,29 @@ df.chem.as_molecule(
 |-----------|------|---------|-------------|
 | `columns` | str, list | required | Column name(s) to convert |
 | `molecule_format` | str, int | `None` | Format for parsing (default: SMILES) |
+| `molecule_type` | None, str, MoleculeType, OpenEye class | `None` | Concrete molecule class (`OEMol`, `OEGraphMol`, `OEQMol`) |
+| `no_title` | bool | `False` | Clear molecule titles on converted molecules |
+| `inplace` | bool | `False` | Modify DataFrame in place |
+
+#### `as_query()`
+
+Convert column(s) to `QueryDtype`.
+
+```python
+df.chem.as_query(
+    columns,
+    *,
+    query_format="smarts",
+    no_title=False,
+    inplace=False
+)
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `columns` | str, list | required | Column name(s) to convert |
+| `query_format` | str, QueryFormat | `"smarts"` | Query parser to use: `"smarts"` or `"smirks"` |
+| `no_title` | bool | `False` | Clear query molecule titles |
 | `inplace` | bool | `False` | Modify DataFrame in place |
 
 #### `as_design_unit()`
@@ -554,8 +611,9 @@ Access these methods via `series.chem.<method>()`:
 | Method | Returns | Description |
 |--------|---------|-------------|
 | `copy_molecules()` | `Series[MoleculeDtype]` | Deep copy all molecules |
-| `is_valid()` | `Series[bool]` | Boolean mask of valid molecules |
-| `as_molecule(molecule_format=None)` | `Series[MoleculeDtype]` | Convert series to molecules |
+| `is_valid()` | `Series[bool]` | Boolean mask of valid molecules or queries |
+| `as_molecule(molecule_format=None, molecule_type=None, no_title=False)` | `Series[MoleculeDtype]` | Convert series to molecules |
+| `as_query(query_format="smarts", no_title=False)` | `Series[QueryDtype]` | Convert SMARTS/SMIRKS strings to query molecules |
 | `to_molecule(molecule_format=None)` | `Series[MoleculeDtype]` | Convert from strings to molecules |
 | `to_molecule_bytes(molecule_format=OEFormat_SMI, flavor=None, gzip=False)` | `Series[bytes]` | Convert to byte strings |
 | `to_molecule_strings(molecule_format="smiles", flavor=None, gzip=False, b64encode=False)` | `Series[str]` | Convert to string representations |
@@ -567,20 +625,23 @@ Access these methods via `series.chem.<method>()`:
 | Method | Returns | Description |
 |--------|---------|-------------|
 | `copy_design_units()` | `Series[DesignUnitDtype]` | Deep copy all design units |
-| `get_ligands(clear_titles=False)` | `Series[MoleculeDtype]` | Extract ligand molecules |
-| `get_proteins(clear_titles=False)` | `Series[MoleculeDtype]` | Extract protein molecules |
+| `get_ligands(no_title=False)` | `Series[MoleculeDtype]` | Extract ligand molecules |
+| `get_proteins(no_title=False)` | `Series[MoleculeDtype]` | Extract protein molecules |
 | `get_components(mask)` | `Series[MoleculeDtype]` | Extract components by mask |
 | `as_design_unit()` | `Series[DesignUnitDtype]` | Convert series to design units |
+
+`clear_titles` remains accepted as a compatibility alias for `no_title` on design-unit extraction methods.
 
 ---
 
 ### Extension Arrays and Dtypes
 
-OEPandas provides three custom Pandas extension types:
+OEPandas provides four custom Pandas extension types:
 
 | Array Class | Dtype Class | Underlying Type | Description |
 |-------------|-------------|-----------------|-------------|
-| `MoleculeArray` | `MoleculeDtype` | `oechem.OEMol` | Stores molecular structures |
+| `MoleculeArray` | `MoleculeDtype` | `oechem.OEMolBase` | Stores molecular structures |
+| `QueryArray` | `QueryDtype` | `oechem.OEQMol` | Stores SMARTS/SMIRKS query molecules |
 | `DesignUnitArray` | `DesignUnitDtype` | `oechem.OEDesignUnit` | Stores protein-ligand complexes |
 | `DisplayArray` | `DisplayDtype` | `oedepict.OE2DMolDisplay` | Stores 2D molecular depictions |
 
@@ -593,8 +654,9 @@ arr = MoleculeArray.read_oeb("file.oeb")
 arr = MoleculeArray.read_smi("file.smi")
 
 # Create from sequences
-arr = MoleculeArray._from_sequence(["CCO", "c1ccccc1"])
-arr = MoleculeArray._from_sequence_of_strings(["CCO", "c1ccccc1"])
+arr = MoleculeArray.from_sequence(["CCO", "c1ccccc1"])
+arr = MoleculeArray.from_sequence_of_strings(["CCO", "c1ccccc1"])
+arr = oepd.MoleculeArray.from_sequence_of_strings(["CCO"], molecule_type=oepd.MoleculeType.OEGRAPHMOL)
 
 # Conversion methods
 smiles = arr.to_smiles(flavor=OESMILESFlag_ISOMERIC)
@@ -603,6 +665,8 @@ bytes_arr = arr.to_molecule_bytes(molecule_format=OEFormat_OEB)
 
 # Substructure searching
 matches = arr.substructure_search("c1ccccc1")
+query_mol = oepd.QueryArray.from_sequence_of_strings(["[#6]-[#8]"])[0]
+matches = arr.substructure_search(query_mol)
 
 # Utility methods
 arr.deepcopy()        # Deep copy
@@ -612,6 +676,19 @@ arr.dropna()          # Remove None values
 arr.fillna(value)     # Fill None values
 ```
 
+#### QueryArray Class Methods
+
+```python
+# Create query molecules from SMARTS or SMIRKS strings
+queries = oepd.QueryArray.from_sequence_of_strings(["[#6]-[#8]"], query_format="smarts")
+reactions = oepd.QueryArray.from_sequence_of_strings(["[#6:1]-[#8:2]>>[#6:1]=[#8:2]"], query_format="smirks")
+
+# Utility methods
+queries.deepcopy()    # Deep copy
+queries.valid()       # Boolean mask of valid query molecules
+queries.isna()        # Boolean mask of None values
+```
+
 #### DesignUnitArray Class Methods
 
 ```python
@@ -619,8 +696,8 @@ arr.fillna(value)     # Fill None values
 arr = DesignUnitArray.read_oedu("file.oedu")
 
 # Extract components (returns MoleculeArray)
-ligands = arr.get_ligands(clear_titles=False)
-proteins = arr.get_proteins(clear_titles=False)
+ligands = arr.get_ligands(no_title=False)
+proteins = arr.get_proteins(no_title=False)
 components = arr.get_components(mask)
 
 # Utility methods
@@ -710,6 +787,7 @@ oepandas/
 │       ├── __init__.py
 │       ├── base.py              # OEExtensionArray base class
 │       ├── molecule.py          # MoleculeArray, MoleculeDtype
+│       ├── query.py             # QueryArray, QueryDtype
 │       ├── design_unit.py       # DesignUnitArray, DesignUnitDtype
 │       └── display.py           # DisplayArray, DisplayDtype
 ├── tests/                       # Test suite

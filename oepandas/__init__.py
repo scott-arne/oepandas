@@ -17,7 +17,7 @@ from .arrays import (
 from .exception import FileError, UnsupportedFileFormat
 from .pandas_extensions import read_molecule_csv, read_oeb, read_oedb, read_oedu, read_sdf, read_smi
 
-__version__ = '3.2.7'
+__version__ = '3.3.0'
 
 __all__ = [
     "exception",

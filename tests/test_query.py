@@ -100,6 +100,14 @@ def test_query_dtype_round_trips_through_series():
     assert isinstance(series.iloc[0], oechem.OEQMol)
 
 
+def test_query_dtype_registered_by_name():
+    series = pd.Series(["[#6]"]).astype("query")
+
+    assert isinstance(series.dtype, QueryDtype)
+    assert isinstance(series.iloc[0], oechem.OEQMol)
+    assert series.iloc[0].IsValid()
+
+
 def test_query_dtype_series_scalar_string_assignment_preserves_query_dtype():
     series = pd.Series(QueryArray.from_sequence(["[#6]"]), dtype=QueryDtype())
 

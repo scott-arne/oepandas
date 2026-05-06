@@ -4,7 +4,7 @@ import typing
 from collections import namedtuple
 from collections.abc import Iterable, Sequence
 from copy import copy as shallow_copy
-from typing import Any, Self, cast
+from typing import Any, ClassVar, Self, cast
 
 import numpy as np
 import pandas as pd
@@ -880,9 +880,9 @@ class FingerprintDtype(PandasExtensionDtype):
     OpenEye fingerprint datatype for Pandas.
     """
 
-    type: type = oegraphsim.OEFingerPrint  # noqa
-    name: str = "fingerprint"  # noqa
-    kind: str = "O"
+    type: ClassVar[type] = oegraphsim.OEFingerPrint
+    name: ClassVar[str] = "fingerprint"
+    kind: ClassVar[str] = "O"
     base = np.dtype("O")
 
     @classmethod

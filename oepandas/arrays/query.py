@@ -1,7 +1,7 @@
 import logging
 from collections.abc import Iterable, Sequence
 from enum import StrEnum
-from typing import Any, Self, TypeAlias, cast
+from typing import Any, ClassVar, Self, TypeAlias, cast
 
 import numpy as np
 import pandas as pd
@@ -362,9 +362,9 @@ class QueryDtype(PandasExtensionDtype):
     OpenEye query molecule datatype for Pandas.
     """
 
-    type: type = oechem.OEQMol  # noqa
-    name: str = "query"  # noqa
-    kind: str = "O"
+    type: ClassVar[type] = oechem.OEQMol
+    name: ClassVar[str] = "query"
+    kind: ClassVar[str] = "O"
     base = np.dtype("O")
 
     @classmethod

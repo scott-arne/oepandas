@@ -316,13 +316,13 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         if isinstance(other, OEExtensionArray):
             if len(self) != len(other):
                 return np.zeros(len(self), dtype=bool)
-            return np.array([a is b for a, b in zip(self._objs, other._objs, strict=False)], dtype=bool)
+            return np.array([a is not b for a, b in zip(self._objs, other._objs, strict=True)], dtype=bool)
 
         elif isinstance(other, Iterable):
             other_list = list(other)
             if len(self) != len(other_list):
                 return np.zeros(len(self), dtype=bool)
-            return np.array([a is b for a, b in zip(self._objs, other_list, strict=False)], dtype=bool)
+            return np.array([a is not b for a, b in zip(self._objs, other_list, strict=True)], dtype=bool)
 
         else:
             raise TypeError(f'Cannot compare non-equality of {type(self).__name__} and {type(other).__name__}')

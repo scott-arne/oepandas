@@ -2,7 +2,7 @@ import base64
 import logging
 from collections.abc import Generator, Iterable, Sequence
 from enum import StrEnum
-from typing import Any, Literal, Self, TypeAlias
+from typing import Any, ClassVar, Literal, Self, TypeAlias
 
 import numpy as np
 import pandas as pd
@@ -298,8 +298,7 @@ class MoleculeArray(OEExtensionArray[oechem.OEMolBase]):
 
     @property
     def shape(self):
-      return (len(self),)
-
+        return (len(self),)
 
     @classmethod
     def _from_sequence(
@@ -784,9 +783,9 @@ class MoleculeDtype(PandasExtensionDtype):
     OpenEye molecule datatype for Pandas
     """
 
-    type: type = oechem.OEMolBase  # noqa
-    name: str = "molecule"  # noqa
-    kind: str = "O"
+    type: ClassVar[type] = oechem.OEMolBase
+    name: ClassVar[str] = "molecule"
+    kind: ClassVar[str] = "O"
     base = np.dtype("O")
 
     @classmethod
