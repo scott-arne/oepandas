@@ -1,7 +1,8 @@
 import sys
+from pathlib import Path
+
 # noinspection PyPackageRequirements
 from invoke.tasks import task
-from pathlib import Path
 
 ROOT = Path(__file__).parent.absolute()
 

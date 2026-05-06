@@ -112,7 +112,7 @@ def iterable_to_numpy_fps(fps, quiet=True):
     fp_info = None
 
     # noinspection PyTypeChecker
-    for fp in tqdm(fps, desc="Converting Fingerprints", unit="fp", disable=quiet):  # type: oegraphsim.OEFingerPrint
+    for fp in tqdm(fps, desc="Converting Fingerprints", unit="fp", disable=quiet):
         # If we need to calculate the fingerprint processing items
         # This is done once for efficiency - we assume every fingerprint is the same type and length
         if fp_info is None:
@@ -652,7 +652,6 @@ class FingerprintArray(OEExtensionArray[oegraphsim.OEFingerPrint]):
     def fillna(
         self,
         value: object = None,
-        method=None,
         limit: int | None = None,
         copy: bool = True,
     ) -> Self:
@@ -660,7 +659,6 @@ class FingerprintArray(OEExtensionArray[oegraphsim.OEFingerPrint]):
         Fill N/A values and invalid fingerprints.
 
         :param value: Fill value (should be an OEFingerPrint).
-        :param method: Not used.
         :param limit: Maximum number of entries to fill.
         :param copy: Whether to copy the data.
         :returns: Filled FingerprintArray.

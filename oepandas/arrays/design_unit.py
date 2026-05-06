@@ -206,6 +206,10 @@ class DesignUnitArray(OEExtensionArray[oechem.OEDesignUnit]):
         """
         mols = []
         for du in self:
+            if du is None:
+                mols.append(None)
+                continue
+
             mol = oechem.OEMol()
             du.GetComponents(mol, mask)
             mols.append(mol)
@@ -221,6 +225,10 @@ class DesignUnitArray(OEExtensionArray[oechem.OEDesignUnit]):
         clear_title_values = _resolve_no_title(no_title, clear_titles)
         ligs = []
         for du in self:
+            if du is None:
+                ligs.append(None)
+                continue
+
             lig = oechem.OEMol()
             du.GetLigand(lig)
 
@@ -241,6 +249,10 @@ class DesignUnitArray(OEExtensionArray[oechem.OEDesignUnit]):
         clear_title_values = _resolve_no_title(no_title, clear_titles)
         prots = []
         for du in self:
+            if du is None:
+                prots.append(None)
+                continue
+
             prot = oechem.OEMol()
             du.GetProtein(prot)
 

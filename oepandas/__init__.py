@@ -1,6 +1,7 @@
 import contextlib
 import logging
 
+from . import util
 from .arrays import (
     DesignUnitArray,
     DesignUnitDtype,

@@ -4,21 +4,18 @@ from abc import ABCMeta
 from collections.abc import Callable, Iterable, Iterator, Sequence, Sized
 from copy import copy as shallow_copy
 from itertools import chain
-from typing import Any, Generic, Self, TypeVar
+from typing import Any, Generic, Self, TypeVar, overload
 
 import numpy as np
 import pandas as pd
 from openeye import oechem, oedepict, oegraphsim
 
 # noinspection PyProtectedMember
-from pandas._typing import ArrayLike, FillnaOptions, Shape, TakeIndexer
+from pandas._typing import ArrayLike, ScalarIndexer, SequenceIndexer, TakeIndexer
 from pandas.api.extensions import ExtensionArray
 from pandas.core.algorithms import take as pandas_take
 
 log = logging.getLogger("oepandas")
-
-# Sentinel for no fill value given
-NotSet = object()
 
 ########################################################################################################################
 # Base ExtensionArray definition for OpenEye objects
@@ -68,7 +65,7 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         """
         self._objs.append(None if pd.isna(item) else item)
 
-    def extend(self, items: Iterable[T]) -> None:
+    def extend(self, items: Iterable[T | None]) -> None:
         """
         Extend this molecule array
         Note: This only checks for NaN/None values, but does not type check other inputs for performance
@@ -118,14 +115,12 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
     def fillna(
         self,
         value: object | ArrayLike | None = None,
-        method: FillnaOptions | None = None,
         limit: int | None = None,
         copy: bool = True,
-    ):
+    ) -> Self:
         """
         Fill N/A values and invalid molecules
         :param value: Fill value
-        :param method: Method (does not do anything here)
         :param limit: Maximum number of entries to fill
         :param copy: Whether to copy the data
         :return: Filled extension array
@@ -190,26 +185,26 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
 
     def take(
         self,
-        indices: TakeIndexer,
+        indexer: TakeIndexer,
         *,
         allow_fill: bool = False,
-        fill_value: Any = NotSet,
+        fill_value: Any = None,
     ) -> Self:
         """
         Take elements from the array
-        :param indices:
+        :param indexer:
         :param allow_fill:
         :param fill_value:
         :return:
         """
-        if allow_fill and fill_value is NotSet:
+        if allow_fill and fill_value is None:
             fill_value = self.dtype.na_value
 
         raw = self._objs if isinstance(self._objs, np.ndarray) else np.array(self._objs, dtype=object)
-        result = pandas_take(raw, indices, allow_fill=allow_fill, fill_value=fill_value)
+        result = pandas_take(raw, indexer, allow_fill=allow_fill, fill_value=fill_value)
         return self.__class__(result, metadata=shallow_copy(self.metadata))
 
-    def tolist(self, copy=False) -> list[oechem.OEMolBase]:
+    def tolist(self, copy=False) -> list[T | None]:
         """
         Convert to a list
         :param copy: Whether to copy the molecules or return pointers
@@ -220,7 +215,7 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         return shallow_copy(self._objs)
 
     @property
-    def shape(self) -> Shape:
+    def shape(self) -> tuple[int]:
         return (len(self._objs),)
 
     @property
@@ -277,7 +272,7 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
 
         # Vectorized: Use numpy ufunc for better performance on large arrays
         ufunc_is_valid = np.frompyfunc(_is_valid, 1, 1)
-        return ufunc_is_valid(self._objs).astype(bool)
+        return np.asarray(ufunc_is_valid(self._objs), dtype=bool)
 
     # noinspection PyDefaultArgument
     def __deepcopy__(self, memodict=None):
@@ -302,7 +297,7 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
         """
         return len(self._objs)
 
-    def __iter__(self) -> Iterator[T]:
+    def __iter__(self) -> Iterator[T | None]:
         """
         Iterate this object
         :return: Iterator over objects in this extension array
@@ -435,15 +430,22 @@ class OEExtensionArray(ExtensionArray, Iterable, Generic[T], metaclass=ABCMeta):
             for pos, v in zip(positions, values, strict=True):
                 self._objs[pos] = _normalize_scalar(v)
 
-    def __getitem__(self, index) -> T | Self:
+    @overload
+    def __getitem__(self, item: ScalarIndexer) -> T | None: ...
+
+    @overload
+    def __getitem__(self, item: SequenceIndexer) -> Self: ...
+
+    def __getitem__(self, item: ScalarIndexer | SequenceIndexer) -> T | None | Self:
         """
         Get an item in the array
-        :param index: Item index
+        :param item: Item index
         :return: Item at index
         """
-        if isinstance(index, int):
-            return self._objs[index]
-        return self.__class__(self._objs[index], metadata=shallow_copy(self.metadata))
+        if isinstance(item, (int, np.integer)):
+            return self._objs[int(item)]
+        raw = np.asarray(self._objs, dtype=object)
+        return self.__class__(raw[item], metadata=shallow_copy(self.metadata))
 
     def __hash__(self):
         return hash(tuple(self._objs))

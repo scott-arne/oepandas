@@ -382,11 +382,10 @@ class MoleculeArray(OEExtensionArray[oechem.OEMolBase]):
         molecule_format = molecule_format or oechem.OEFormat_SMI
 
         # Standardize the format
-        molecule_format: str | int
         molecule_format_ = get_oeformat(molecule_format)
 
         mols = []
-        for i, s in enumerate(strings):  # type: int, str
+        for i, s in enumerate(strings):
             mol = _new_molecule(normalized_molecule_type)
 
             if isinstance(s, str):
@@ -732,7 +731,7 @@ class MoleculeArray(OEExtensionArray[oechem.OEMolBase]):
             return ''
 
         vectorized = np.frompyfunc(_smiles, 1, 1)(self._objs)
-        return vectorized.astype(str)
+        return np.asarray(vectorized, dtype=str)
 
     def structural_eq(self, other, flavor=None):
         s1 = self.to_smiles(flavor=flavor)

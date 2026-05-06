@@ -521,8 +521,11 @@ def _read_molecules_to_dataframe(
     if expand_confs:
         confs = []
         conf_idx = []
-        for mol in mols:  # type: oechem.OEMol
-            for conf in mol.GetConfs():  # type: oechem.OEConfBase
+        for mol in mols:
+            if mol is None:
+                continue
+
+            for conf in mol.GetConfs():
                 confs.append(oechem.OEMol(conf))
                 conf_idx.append(conf.GetIdx())
 
@@ -2170,6 +2173,8 @@ def read_oedu(
 
     if no_title:
         for du in du_array:
+            if du is None:
+                continue
             du.SetTitle("")
 
     # Read data
@@ -2177,6 +2182,8 @@ def read_oedu(
     if generic_data:
         # Get the data and use indexes to assign data
         for idx, du in enumerate(du_array):
+            if du is None:
+                continue
             for diter in du.GetDataIter():
                 try:
                     tag = oechem.OEGetTag(diter.GetTag())
@@ -2188,7 +2195,7 @@ def read_oedu(
 
     return pd.DataFrame({
         design_unit_column: pd.Series(du_array, dtype=DesignUnitDtype()),
-        title_column: pd.Series([du.GetTitle() for du in du_array], dtype=str),
+        title_column: pd.Series([du.GetTitle() if du is not None else None for du in du_array], dtype=str),
         **data.to_series_dict()
     })
 
