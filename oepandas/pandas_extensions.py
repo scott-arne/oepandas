@@ -1137,6 +1137,30 @@ _OE_TYPE_COERCERS: dict[str, Callable[..., object]] = {
 }
 
 
+def _value_matches_family(value: object, family: str) -> bool:
+    """Return whether a scalar value natively matches a resolved scalar family.
+
+    Bool and int are treated as disjoint families even though Python's ``bool``
+    subclasses ``int``: a bool value does not match the int family and an int value
+    does not match the bool family.
+
+    :param value: The cell value to test.
+    :param family: One of the scalar ``_OE_TYPE_*`` family constants.
+    :returns: True if ``value`` is a native instance of ``family``.
+    """
+    if family == _OE_TYPE_INT:
+        return isinstance(value, _INTEGER_TYPES) and not isinstance(value, _BOOLEAN_TYPES)
+    if family == _OE_TYPE_BOOL:
+        return isinstance(value, _BOOLEAN_TYPES)
+    if family == _OE_TYPE_FLOAT:
+        return isinstance(value, _FLOAT_TYPES)
+    if family == _OE_TYPE_STRING:
+        return isinstance(value, _STRING_TYPES)
+    if family == _OE_TYPE_BYTES:
+        return isinstance(value, _BYTES_TYPES)
+    return False
+
+
 def _is_missing(value: object) -> bool:
     """Return whether a scalar cell value is missing.
 
@@ -1144,7 +1168,7 @@ def _is_missing(value: object) -> bool:
     :returns: True for None / NaN / NaT, otherwise False.
     """
     try:
-        return bool(pd.isna(value))
+        return bool(pd.isna(value))  # type: ignore[call-overload]
     except (TypeError, ValueError):
         return value is None
 
@@ -1749,14 +1773,20 @@ class OEDataFrameAccessor:
                 # scalar families, coerce the (already type-matching) value to a native
                 # Python type before set_value, because OpenEye's set_value rejects
                 # numpy scalars such as np.int64 and np.bool_.
-                if (not safe) or isinstance(v, field_types[col]):
-                    if family in _OE_TYPE_COERCERS:
+                if family in _OE_TYPE_COERCERS:
+                    # Scalar families: bool and int are disjoint value families, so a
+                    # bool cell in an int-resolved column is skipped under safe mode
+                    # rather than written as 1. Coerce to a native Python type before
+                    # set_value (OpenEye rejects numpy scalars like np.int64/np.bool_).
+                    if (not safe) or _value_matches_family(v, family):
                         try:
                             record.set_value(f, _OE_TYPE_COERCERS[family](v))
                         except (ValueError, TypeError):
                             if not safe:
                                 raise
-                    else:
+                else:
+                    # Molecule / design-unit fields.
+                    if (not safe) or isinstance(v, field_types[col]):
                         record.set_value(f, v)
 
             oechem.OEWriteRecord(ofs, record)

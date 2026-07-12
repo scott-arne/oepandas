@@ -550,6 +550,26 @@ class TestFileWriters:
             # Row 1 ("False" string, incompatible with bool) left UNSET, not coerced to True.
             assert not records[1].has_value(bfield)
 
+    def test_to_oedb_safe_treats_bool_and_int_as_disjoint(self, test_molecules):
+        # [1, True, 2, 3] resolves to the int family (majority int); the bool cell must
+        # NOT be written as int(True)==1 under safe mode -- it is left unset.
+        df = pd.DataFrame({
+            "Molecule": oepd.MoleculeArray(test_molecules),
+            "I": pd.Series([1, True, 2, 3], dtype=object),
+        })
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "boolint.oedb"
+            df.chem.to_oedb(str(out), primary_molecule_column="Molecule", index=False)
+            ifs = oechem.oeifstream()
+            assert ifs.open(str(out))
+            records = list(oechem.OEReadRecords(ifs))
+            ifs.close()
+            ifield = oechem.OEField("I", oechem.Types.Int)
+            assert records[0].has_value(ifield) and records[0].get_value(ifield) == 1
+            assert not records[1].has_value(ifield)   # True (bool) not written to int field
+            assert records[2].get_value(ifield) == 2
+            assert records[3].get_value(ifield) == 3
+
 
 class TestPandasAccessors:
     """Test pandas series/dataframe accessors"""
