@@ -1744,8 +1744,11 @@ class OEDataFrameAccessor:
                 record.add_field(f)
 
                 if family in _OE_TYPE_COERCERS:
-                    # Scalar families: coerce to a native Python type before set_value.
-                    # OpenEye's set_value rejects numpy scalars (e.g. np.int64, np.bool_).
+                    # Scalar families: skip missing cells (do not coerce None/NaN/NA
+                    # into "None"/"nan"/True), then coerce to a native Python type
+                    # before set_value (OpenEye's set_value rejects numpy scalars).
+                    if _is_missing(v):
+                        continue
                     try:
                         record.set_value(f, _OE_TYPE_COERCERS[family](v))
                     except (ValueError, TypeError):

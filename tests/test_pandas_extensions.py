@@ -508,6 +508,28 @@ class TestFileWriters:
             assert rec.get_value(oechem.OEField("B", oechem.Types.Bool)) is True
             ifs.close()
 
+    def test_to_oedb_skips_missing_scalar_values(self, test_molecules):
+        df = pd.DataFrame({
+            "Molecule": oepd.MoleculeArray(test_molecules),
+            "S": pd.Series(["a", None, "c", "d"], dtype=object),
+            "B": pd.Series([True, None, False, True], dtype=object),
+        })
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "missing.oedb"
+            df.chem.to_oedb(str(out), primary_molecule_column="Molecule", index=False)
+            ifs = oechem.oeifstream()
+            assert ifs.open(str(out))
+            records = list(oechem.OEReadRecords(ifs))
+            ifs.close()
+            sfield = oechem.OEField("S", oechem.Types.String)
+            bfield = oechem.OEField("B", oechem.Types.Bool)
+            # Row 0: values present and correct.
+            assert records[0].has_value(sfield) and records[0].get_value(sfield) == "a"
+            assert records[0].has_value(bfield) and records[0].get_value(bfield) is True
+            # Row 1: missing cells left UNSET, not coerced into "None"/True.
+            assert not records[1].has_value(sfield)
+            assert not records[1].has_value(bfield)
+
 
 class TestPandasAccessors:
     """Test pandas series/dataframe accessors"""
