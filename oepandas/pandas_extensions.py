@@ -1743,20 +1743,20 @@ class OEDataFrameAccessor:
 
                 record.add_field(f)
 
-                if family in _OE_TYPE_COERCERS:
-                    # Scalar families: skip missing cells (do not coerce None/NaN/NA
-                    # into "None"/"nan"/True), then coerce to a native Python type
-                    # before set_value (OpenEye's set_value rejects numpy scalars).
-                    if _is_missing(v):
-                        continue
-                    try:
-                        record.set_value(f, _OE_TYPE_COERCERS[family](v))
-                    except (ValueError, TypeError):
-                        if not safe:
-                            raise
-                else:
-                    # Molecule / design-unit fields: pass the object through unchanged.
-                    if (not safe) or isinstance(v, field_types[col]):
+                # Preserve to_oedb's original safe semantics: in safe mode, only write
+                # cells that are already instances of the resolved field type; skip
+                # mismatches (including None/NaN and type-incompatible values). For
+                # scalar families, coerce the (already type-matching) value to a native
+                # Python type before set_value, because OpenEye's set_value rejects
+                # numpy scalars such as np.int64 and np.bool_.
+                if (not safe) or isinstance(v, field_types[col]):
+                    if family in _OE_TYPE_COERCERS:
+                        try:
+                            record.set_value(f, _OE_TYPE_COERCERS[family](v))
+                        except (ValueError, TypeError):
+                            if not safe:
+                                raise
+                    else:
                         record.set_value(f, v)
 
             oechem.OEWriteRecord(ofs, record)

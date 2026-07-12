@@ -530,6 +530,26 @@ class TestFileWriters:
             assert not records[1].has_value(sfield)
             assert not records[1].has_value(bfield)
 
+    def test_to_oedb_safe_skips_incompatible_scalar_values(self, test_molecules):
+        # A bool-family column (predominant bool) with an incompatible string value.
+        # safe=True must leave the incompatible cell UNSET, not coerce "False" -> True.
+        df = pd.DataFrame({
+            "Molecule": oepd.MoleculeArray(test_molecules),
+            "B": pd.Series([True, "False", False, True], dtype=object),
+        })
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "incompat.oedb"
+            df.chem.to_oedb(str(out), primary_molecule_column="Molecule", index=False)
+            ifs = oechem.oeifstream()
+            assert ifs.open(str(out))
+            records = list(oechem.OEReadRecords(ifs))
+            ifs.close()
+            bfield = oechem.OEField("B", oechem.Types.Bool)
+            # Row 0 (True) written correctly.
+            assert records[0].has_value(bfield) and records[0].get_value(bfield) is True
+            # Row 1 ("False" string, incompatible with bool) left UNSET, not coerced to True.
+            assert not records[1].has_value(bfield)
+
 
 class TestPandasAccessors:
     """Test pandas series/dataframe accessors"""
