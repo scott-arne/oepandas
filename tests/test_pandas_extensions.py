@@ -3,6 +3,10 @@ Tests for pandas_extensions.py module
 """
 
 import csv
+import gzip
+import json
+import subprocess
+import sys
 from pathlib import Path
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 
@@ -23,6 +27,7 @@ from oepandas.pandas_extensions import (
     Dataset,
     _add_smiles_columns,
     _is_missing,
+    _oeb_scan_has_unread_data,
     _resolve_oe_data_type,
     _series_to_molecule_array,
     read_molecule_csv,
@@ -32,6 +37,57 @@ from oepandas.pandas_extensions import (
 )
 
 ASSETS = Path(Path(__file__).parent, "assets")
+
+
+def _oeb_raw_text(path):
+    """Return the printable text embedded in an .oeb / .oeb.gz file.
+
+    OEB stores generic/SD data tag names and string values as printable ASCII, and the
+    to_oeb *write* path is reliable, so write-correctness is asserted against the raw
+    file bytes rather than through the intermittently flaky OEB reader.
+    """
+    raw = Path(path).read_bytes()
+    if str(path).endswith(".gz"):
+        raw = gzip.decompress(raw)
+    return raw.decode("latin-1")
+
+
+def _read_oeb_subprocess(path, scalar_cols=(), smiles_cols=(), attempts=6):
+    """Read an .oeb file in a fresh subprocess (with retries) and return selected data.
+
+    OpenEye's OEB *reader* intermittently drops generic/SD data in the process that
+    performs the read; reading in short-lived separate processes avoids this so a full
+    typed round-trip can be asserted. read_oeb raises on a detected drop, which triggers
+    a retry here.
+
+    :returns: dict of {column: [values]} for scalar_cols and {column: [smiles]} for
+        smiles_cols.
+    """
+    code = (
+        "import json, sys\n"
+        "import oepandas as o\n"
+        "from openeye import oechem\n"
+        "df = o.read_oeb(sys.argv[1])\n"
+        "scalar = json.loads(sys.argv[2]); smiles = json.loads(sys.argv[3])\n"
+        "res = {}\n"
+        "for c in scalar:\n"
+        "    res[c] = df[c].tolist() if c in df.columns else None\n"
+        "for c in smiles:\n"
+        "    res[c] = ([oechem.OEMolToSmiles(m) if m is not None else None for m in df[c]]\n"
+        "              if c in df.columns else None)\n"
+        "print(json.dumps(res))\n"
+    )
+    last = ""
+    for _ in range(attempts):
+        proc = subprocess.run(
+            [sys.executable, "-c", code, str(path),
+             json.dumps(list(scalar_cols)), json.dumps(list(smiles_cols))],
+            capture_output=True, text=True, timeout=120,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            return json.loads(proc.stdout.strip().splitlines()[-1])
+        last = proc.stderr
+    raise AssertionError(f"subprocess read_oeb failed after {attempts} attempts: {last[-300:]}")
 
 
 @pytest.fixture
@@ -599,6 +655,256 @@ class TestFileWriters:
             assert records[0].has_value(ffield) and records[0].get_value(ffield) == 1.0
             assert not records[1].has_value(ffield)   # NaN left unset
             assert records[2].get_value(ffield) == 2.0
+
+    # -------------------------------------------------------------------------------
+    # to_oeb writer
+    #
+    # Test strategy: the OpenEye OEB *reader* intermittently drops generic/SD data on
+    # deserialization, but to_oeb always writes the data to the file correctly. Write
+    # correctness is asserted against the raw file bytes (_oeb_raw_text); typed value
+    # round-trips are asserted by reading in a fresh subprocess with retries
+    # (_read_oeb_subprocess). Molecule structure (conformer counts) reads reliably
+    # in-process and is asserted directly.
+    # -------------------------------------------------------------------------------
+
+    def test_to_oeb_writes_typed_data_tags(self, test_molecules):
+        df = pd.DataFrame({
+            "Molecule": oepd.MoleculeArray(test_molecules),
+            "Activity": [1.5, 2.5, 3.5, 4.5],
+            "Count": [1, 2, 3, 4],
+            "Flag": [True, False, True, False],
+            "Label": ["alphaval", "betaval", "gammaval", "deltaval"],
+        })
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "typed.oeb"
+            df.chem.to_oeb(str(out), "Molecule", index=False)
+            assert out.exists()
+            text = _oeb_raw_text(out)
+            for tag in ("Activity", "Count", "Flag", "Label"):
+                assert tag in text, f"tag {tag} not written to file"
+            for value in ("alphaval", "betaval", "gammaval", "deltaval"):
+                assert value in text, f"string value {value} not written to file"
+
+    def test_to_oeb_typed_round_trip(self, test_molecules):
+        df = pd.DataFrame({
+            "Molecule": oepd.MoleculeArray(test_molecules),
+            "Activity": [1.5, 2.5, 3.5, 4.5],
+            "Count": [1, 2, 3, 4],
+            "Flag": [True, False, True, False],
+            "Label": ["a", "b", "c", "d"],
+        })
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "typed.oeb"
+            df.chem.to_oeb(str(out), "Molecule", index=False)
+            data = _read_oeb_subprocess(out, scalar_cols=["Activity", "Count", "Flag", "Label"])
+            assert data["Activity"] == [1.5, 2.5, 3.5, 4.5]
+            assert data["Count"] == [1, 2, 3, 4]
+            # Booleans round-trip as ints (0/1): OEB does not persist boolean-False data.
+            assert data["Flag"] == [1, 0, 1, 0]
+            assert data["Label"] == ["a", "b", "c", "d"]
+
+    def test_to_oeb_index_written_and_omitted(self, test_molecules):
+        df = pd.DataFrame(
+            {"Molecule": oepd.MoleculeArray(test_molecules)},
+            index=["ridx0", "ridx1", "ridx2", "ridx3"],
+        )
+        with TemporaryDirectory() as tmp:
+            with_idx = Path(tmp) / "with_index.oeb"
+            df.chem.to_oeb(str(with_idx), "Molecule", index=True, index_tag="row_index")
+            text = _oeb_raw_text(with_idx)
+            assert "row_index" in text
+            for value in ("ridx0", "ridx1", "ridx2", "ridx3"):
+                assert value in text
+
+            no_idx = Path(tmp) / "no_index.oeb"
+            df.chem.to_oeb(str(no_idx), "Molecule", index=False)
+            assert "row_index" not in _oeb_raw_text(no_idx)
+
+    def test_to_oeb_gzip(self, test_molecules):
+        df = pd.DataFrame({
+            "Molecule": oepd.MoleculeArray(test_molecules),
+            "Note": ["gzval0", "gzval1", "gzval2", "gzval3"],
+        })
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "typed.oeb.gz"
+            df.chem.to_oeb(str(out), "Molecule", index=False)
+            assert out.exists()
+            text = _oeb_raw_text(out)  # decompresses .gz
+            assert "Note" in text and "gzval0" in text
+
+    def test_to_oeb_preserves_conformers(self):
+        from openeye import oeomega
+        mol = oechem.OEMol()
+        oechem.OESmilesToMol(mol, "CCCCCCOCC")
+        omega = oeomega.OEOmega()
+        omega.SetMaxConfs(8)
+        omega.SetStrictStereo(False)
+        omega.SetStrictAtomTypes(False)
+        assert omega(mol)
+        n_confs = mol.NumConfs()
+        assert n_confs >= 2
+        df = pd.DataFrame({"Molecule": oepd.MoleculeArray([mol])})
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "confs.oeb"
+            df.chem.to_oeb(str(out), "Molecule", index=False)
+            back = read_oeb(str(out))
+            assert back["Molecule"].iloc[0].NumConfs() == n_confs
+
+    def test_to_oeb_does_not_mutate_source(self, test_molecules):
+        df = pd.DataFrame({
+            "Molecule": oepd.MoleculeArray(test_molecules),
+            "Activity": [1.5, 2.5, 3.5, 4.5],
+        })
+        with TemporaryDirectory() as tmp:
+            df.chem.to_oeb(str(Path(tmp) / "x.oeb"), "Molecule", title_column=None)
+        assert not df["Molecule"].iloc[0].HasData("Activity")
+
+    def test_to_oeb_secondary_molecule_round_trip(self, test_molecules):
+        reactants = []
+        for smi in ("c1ccccc1", "c1ccncc1", "c1ccsc1", "c1ccoc1"):
+            r = oechem.OEMol()
+            oechem.OESmilesToMol(r, smi)
+            reactants.append(r)
+        df = pd.DataFrame({
+            "Molecule": oepd.MoleculeArray(test_molecules),
+            "Reactant": oepd.MoleculeArray(reactants),
+        })
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "secondary.oeb"
+            df.chem.to_oeb(str(out), "Molecule", index=False)
+            data = _read_oeb_subprocess(out, smiles_cols=["Reactant"])
+            assert data["Reactant"] is not None
+            assert oechem.OEMolToSmiles(reactants[0]) in data["Reactant"]
+
+    def test_to_oeb_skips_design_unit_column(self):
+        du_df = oepd.read_oedu(str(ASSETS / "2.oedu"))
+        du = du_df["Design_Unit"].iloc[0]
+        mol = oechem.OEMol()
+        oechem.OESmilesToMol(mol, "CCO")
+        df = pd.DataFrame({
+            "Molecule": oepd.MoleculeArray([mol]),
+            "DesignUnitColumn": pd.Series(oepd.DesignUnitArray([du]), dtype=oepd.DesignUnitDtype()),
+        })
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "du.oeb"
+            df.chem.to_oeb(str(out), "Molecule", index=False, write_sd_data=True)
+            assert "DesignUnitColumn" not in _oeb_raw_text(out)
+
+    def test_to_oeb_missing_scalar_skipped(self, test_molecules):
+        df = pd.DataFrame({
+            "Molecule": oepd.MoleculeArray(test_molecules),
+            "Activity": [1.5, None, 3.5, 4.5],
+        })
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "missing.oeb"
+            df.chem.to_oeb(str(out), "Molecule", index=False)
+            data = _read_oeb_subprocess(out, scalar_cols=["Activity"])
+            present = [v for v in data["Activity"] if v is not None and v == v]
+            assert sorted(present) == [1.5, 3.5, 4.5]
+
+    def test_to_oeb_none_primary_molecule(self, test_molecules):
+        df = pd.DataFrame({
+            "Molecule": oepd.MoleculeArray([test_molecules[0], None, test_molecules[1]]),
+            "Label": ["keepa", "keepb", "keepc"],
+        })
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "none.oeb"
+            df.chem.to_oeb(str(out), "Molecule", index=False)
+            assert out.exists()
+            text = _oeb_raw_text(out)
+            assert "keepa" in text and "keepc" in text
+
+    def test_to_oeb_bool_int_disjoint(self, test_molecules):
+        df = pd.DataFrame({
+            "Molecule": oepd.MoleculeArray(test_molecules),
+            "I": pd.Series([1, True, 2, 3], dtype=object),
+        })
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "boolint.oeb"
+            df.chem.to_oeb(str(out), "Molecule", index=False)
+            data = _read_oeb_subprocess(out, scalar_cols=["I"])
+            present = [v for v in data["I"] if v is not None and v == v]
+            assert sorted(present) == [1, 2, 3]
+
+    def test_to_oeb_sd_data_written(self, test_molecules):
+        df = pd.DataFrame({
+            "Molecule": oepd.MoleculeArray(test_molecules),
+            "SdCol": ["sdval0", "sdval1", "sdval2", "sdval3"],
+        })
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "sd.oeb"
+            df.chem.to_oeb(str(out), "Molecule", index=False, write_sd_data=True)
+            text = _oeb_raw_text(out)
+            assert "SdCol" in text and "sdval0" in text
+
+    def test_to_oeb_validation_errors(self, test_molecules):
+        df = pd.DataFrame({
+            "Molecule": oepd.MoleculeArray(test_molecules),
+            "Activity": [1.5, 2.5, 3.5, 4.5],
+        })
+        with TemporaryDirectory() as tmp:
+            out = str(Path(tmp) / "err.oeb")
+            with pytest.raises(KeyError):
+                df.chem.to_oeb(out, "Nope")
+            with pytest.raises(TypeError):
+                df.chem.to_oeb(out, "Activity")
+            with pytest.raises(KeyError):
+                df.chem.to_oeb(out, "Molecule", columns=["Missing"])
+            with pytest.raises(ValueError):
+                df.chem.to_oeb(out, "Molecule", index=True, index_tag="Activity")
+
+
+class TestReadOebGuard:
+    """Tests for the read_oeb silent-drop guard and its raw-byte detector."""
+
+    def _write_oeb(self, path, *, data, title):
+        ofs = oechem.oemolostream(str(path))
+        ofs.SetFormat(oechem.OEFormat_OEB)
+        for smi in ("CCO", "CCC"):
+            m = oechem.OEMol()
+            oechem.OESmilesToMol(m, smi)
+            if title:
+                m.SetTitle("TITLE_" + smi)
+            if data:
+                m.SetData("MyTag", 7)
+            oechem.OEWriteMolecule(ofs, m)
+        ofs.close()
+
+    def test_detector_flags_data(self, tmp_path):
+        p = tmp_path / "d.oeb"
+        self._write_oeb(p, data=True, title=False)
+        assert _oeb_scan_has_unread_data(str(p), []) is True
+
+    def test_detector_ignores_molecules_only(self, tmp_path):
+        p = tmp_path / "m.oeb"
+        self._write_oeb(p, data=False, title=False)
+        assert _oeb_scan_has_unread_data(str(p), []) is False
+
+    def test_detector_ignores_titles(self, tmp_path):
+        p = tmp_path / "t.oeb"
+        self._write_oeb(p, data=False, title=True)
+        assert _oeb_scan_has_unread_data(str(p), ["TITLE_CCO", "TITLE_CCC"]) is False
+
+    def test_read_oeb_no_raise_on_molecules_only(self, tmp_path):
+        p = tmp_path / "m.oeb"
+        self._write_oeb(p, data=False, title=False)
+        df = read_oeb(str(p))
+        assert list(df.columns) == ["Molecule", "Title"]
+
+    def test_read_oeb_raises_on_detected_drop(self, tmp_path, monkeypatch):
+        p = tmp_path / "d.oeb"
+        self._write_oeb(p, data=True, title=False)
+        from oepandas import pandas_extensions as pe
+        original = pe._read_molecules_to_dataframe
+        def dropping(reader, fp, **kwargs):
+            real = original(reader, fp, **kwargs)
+            keep = [c for c in real.columns
+                    if c in (kwargs.get("molecule_column", "Molecule"),
+                             kwargs.get("title_column", "Title"))]
+            return real[keep]
+        monkeypatch.setattr(pe, "_read_molecules_to_dataframe", dropping)
+        with pytest.raises(oepd.FileError):
+            read_oeb(str(p))
 
 
 class TestPandasAccessors:
