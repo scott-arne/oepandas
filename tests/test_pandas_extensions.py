@@ -15,6 +15,14 @@ from oepandas.pandas_extensions import (
     Column,
     Dataset,
     _add_smiles_columns,
+    _is_missing,
+    _OE_TYPE_BOOL,
+    _OE_TYPE_BYTES,
+    _OE_TYPE_FLOAT,
+    _OE_TYPE_INT,
+    _OE_TYPE_MOLECULE,
+    _OE_TYPE_STRING,
+    _resolve_oe_data_type,
     _series_to_molecule_array,
     read_molecule_csv,
     read_oeb,
@@ -253,6 +261,61 @@ class TestFileReaders:
             Path(temp_path).unlink()
 
 
+class TestResolveOeDataType:
+    """Test the shared dtype -> OpenEye type-family resolver."""
+
+    def test_float_family(self):
+        s = pd.Series([1.0, 2.5], dtype="float64")
+        assert _resolve_oe_data_type(s, s.dtype) == _OE_TYPE_FLOAT
+
+    def test_integer_family(self):
+        s = pd.Series([1, 2], dtype="int64")
+        assert _resolve_oe_data_type(s, s.dtype) == _OE_TYPE_INT
+
+    def test_boolean_family(self):
+        s = pd.Series([True, False], dtype="bool")
+        assert _resolve_oe_data_type(s, s.dtype) == _OE_TYPE_BOOL
+
+    def test_object_column_integer_family(self):
+        s = pd.Series([1, 2, 3], dtype=object)
+        assert _resolve_oe_data_type(s, s.dtype) == _OE_TYPE_INT
+
+    def test_object_column_float_family(self):
+        s = pd.Series([1.0, 2.0], dtype=object)
+        assert _resolve_oe_data_type(s, s.dtype) == _OE_TYPE_FLOAT
+
+    def test_object_column_bool_family(self):
+        s = pd.Series([True, False, True], dtype=object)
+        assert _resolve_oe_data_type(s, s.dtype) == _OE_TYPE_BOOL
+
+    def test_string_family_object_column(self):
+        s = pd.Series(["a", "b"], dtype=object)
+        assert _resolve_oe_data_type(s, s.dtype) == _OE_TYPE_STRING
+
+    def test_bytes_family_object_column(self):
+        s = pd.Series([b"a", b"b"], dtype=object)
+        assert _resolve_oe_data_type(s, s.dtype) == _OE_TYPE_BYTES
+
+    def test_molecule_family(self):
+        mols = []
+        for smi in ("CCO", "CCC"):
+            m = oechem.OEMol()
+            oechem.OESmilesToMol(m, smi)
+            mols.append(m)
+        s = pd.Series(oepd.MoleculeArray(mols))
+        assert _resolve_oe_data_type(s, s.dtype) == _OE_TYPE_MOLECULE
+
+    def test_undeterminable_returns_none(self):
+        s = pd.Series([None, None], dtype=object)
+        assert _resolve_oe_data_type(s, s.dtype) is None
+
+    def test_is_missing(self):
+        assert _is_missing(None) is True
+        assert _is_missing(float("nan")) is True
+        assert _is_missing(0) is False
+        assert _is_missing("") is False
+
+
 class TestFileWriters:
     """Test file writing functionality through pandas accessors"""
 
@@ -410,6 +473,17 @@ class TestFileWriters:
             index_field = oechem.OEField("index", oechem.Types.String)
             assert not record.has_field(index_field)
             ifs.close()
+
+    def test_to_oedb_skips_unresolvable_column(self, test_molecules):
+        df = pd.DataFrame({
+            "Molecule": oepd.MoleculeArray(test_molecules),
+            "Blank": pd.Series([None, None, None, None], dtype=object),
+        })
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "unresolvable.oedb"
+            # Must not raise KeyError for the unresolvable "Blank" column.
+            df.chem.to_oedb(str(out), primary_molecule_column="Molecule")
+            assert out.exists()
 
 
 class TestPandasAccessors:

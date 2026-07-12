@@ -1110,6 +1110,88 @@ _BYTES_TYPES = (
     bytes
 )
 
+# ----------------------------------------------------------------------------------------------------------------------
+# Shared type resolution for the typed writers (to_oeb / to_oedb)
+# ----------------------------------------------------------------------------------------------------------------------
+
+# Resolved OpenEye data-type families. Both to_oedb (OEField selection) and to_oeb
+# (native mol.SetData coercion) map a column to one of these families.
+_OE_TYPE_FLOAT = "float"
+_OE_TYPE_INT = "int"
+_OE_TYPE_BOOL = "bool"
+_OE_TYPE_STRING = "string"
+_OE_TYPE_BYTES = "bytes"
+_OE_TYPE_MOLECULE = "molecule"
+_OE_TYPE_DESIGN_UNIT = "design_unit"
+
+# Native Python coercers for the typed generic-data path in to_oeb. mol.SetData rejects
+# numpy scalar types (e.g. np.int64, np.bool_), so cell values must be coerced to a
+# native Python type before being set. Molecule/design-unit families are handled separately.
+_OE_TYPE_COERCERS: dict[str, Callable[..., object]] = {
+    _OE_TYPE_FLOAT: float,
+    _OE_TYPE_INT: int,
+    _OE_TYPE_BOOL: bool,
+    _OE_TYPE_STRING: str,
+    _OE_TYPE_BYTES: bytes,
+}
+
+
+def _is_missing(value: object) -> bool:
+    """Return whether a scalar cell value is missing.
+
+    :param value: A scalar cell value (molecule columns are handled separately).
+    :returns: True for None / NaN / NaT, otherwise False.
+    """
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return value is None
+
+
+def _resolve_oe_data_type(series: pd.Series, dtype: object, *, sample_size: int = 25) -> str | None:
+    """Resolve a DataFrame column to a shared OpenEye data-type family.
+
+    The families are consumed by :meth:`OEDataFrameAccessor.to_oedb` (to select an
+    ``OEField`` type) and :meth:`OEDataFrameAccessor.to_oeb` (to select a native
+    coercion for ``mol.SetData``). For columns without a recognized extension/numpy
+    dtype, the type is inferred by sampling with :func:`predominant_type`.
+
+    :param series: Column values, sampled only when ``dtype`` is not directly recognized.
+    :param dtype: The column's pandas dtype.
+    :param sample_size: Maximum rows sampled by :func:`predominant_type`.
+    :returns: One of the ``_OE_TYPE_*`` family constants, or None if it cannot be determined.
+    """
+    if isinstance(dtype, _FLOAT_TYPES):
+        return _OE_TYPE_FLOAT
+    if isinstance(dtype, _INTEGER_TYPES):
+        return _OE_TYPE_INT
+    if isinstance(dtype, _BOOLEAN_TYPES):
+        return _OE_TYPE_BOOL
+    if isinstance(dtype, MoleculeDtype):
+        return _OE_TYPE_MOLECULE
+    if isinstance(dtype, DesignUnitDtype):
+        return _OE_TYPE_DESIGN_UNIT
+
+    resolved = predominant_type(series, sample_size)
+    if resolved is None:
+        return None
+    # Check bool before int: bool is a subclass of int in Python.
+    if issubclass(resolved, _BOOLEAN_TYPES):
+        return _OE_TYPE_BOOL
+    if issubclass(resolved, _INTEGER_TYPES):
+        return _OE_TYPE_INT
+    if issubclass(resolved, _FLOAT_TYPES):
+        return _OE_TYPE_FLOAT
+    if issubclass(resolved, _STRING_TYPES):
+        return _OE_TYPE_STRING
+    if issubclass(resolved, _BYTES_TYPES):
+        return _OE_TYPE_BYTES
+    if issubclass(resolved, oechem.OEMolBase):
+        return _OE_TYPE_MOLECULE
+    if issubclass(resolved, oechem.OEDesignUnit):
+        return _OE_TYPE_DESIGN_UNIT
+    return None
+
 
 @_register_dataframe_accessor("chem")
 class OEDataFrameAccessor:
@@ -1602,48 +1684,34 @@ class OEDataFrameAccessor:
         fields = {}
         field_types = {}
         for col in cols:
-            if isinstance(self._obj.dtypes[col], _FLOAT_TYPES):
+            family = _resolve_oe_data_type(
+                cast(pd.Series, self._obj[col]), self._obj.dtypes[col], sample_size=sample_size
+            )
+
+            if family == _OE_TYPE_FLOAT:
                 fields[col] = oechem.OEField(col, oechem.Types.Float)
                 field_types[col] = _FLOAT_TYPES
-
-            elif isinstance(self._obj.dtypes[col], _INTEGER_TYPES):
+            elif family == _OE_TYPE_INT:
                 fields[col] = oechem.OEField(col, oechem.Types.Int)
                 field_types[col] = _INTEGER_TYPES
-
-            elif isinstance(self._obj.dtypes[col], _BOOLEAN_TYPES):
+            elif family == _OE_TYPE_BOOL:
                 fields[col] = oechem.OEField(col, oechem.Types.Bool)
                 field_types[col] = _BOOLEAN_TYPES
-
-            elif isinstance(self._obj.dtypes[col], MoleculeDtype):
+            elif family == _OE_TYPE_STRING:
+                fields[col] = oechem.OEField(col, oechem.Types.String)
+                field_types[col] = _STRING_TYPES
+            elif family == _OE_TYPE_BYTES:
+                fields[col] = oechem.OEField(col, oechem.Types.Blob)
+                field_types[col] = _BYTES_TYPES
+            elif family == _OE_TYPE_MOLECULE:
                 fields[col] = oechem.OEField(col, oechem.Types.Chem.Mol)
                 field_types[col] = oechem.OEMolBase
-
+            elif family == _OE_TYPE_DESIGN_UNIT:
+                fields[col] = oechem.OEField(col, oechem.Types.Chem.DesignUnit)
+                field_types[col] = oechem.OEDesignUnit
             else:
-                series = cast(pd.Series, self._obj[col])
-                t = predominant_type(series, sample_size)
-
-                if t is None:
-                    log.warning(f"Could not determine predominant type for column {col}")
-                    continue
-
-                resolved_t: type = t
-
-                if issubclass(resolved_t, _STRING_TYPES):
-                    fields[col] = oechem.OEField(col, oechem.Types.String)
-                    field_types[col] = _STRING_TYPES
-
-                elif issubclass(resolved_t, _BYTES_TYPES):
-                    fields[col] = oechem.OEField(col, oechem.Types.Blob)
-                    field_types[col] = _BYTES_TYPES
-
-                elif issubclass(resolved_t, oechem.OEDesignUnit):
-                    fields[col] = oechem.OEField(col, oechem.Types.Chem.DesignUnit)
-                    field_types[col] = oechem.OEDesignUnit
-
-                else:
-                    log.warning(
-                        f"Do not know the OEField type that maps to dtype {resolved_t.__name__} in column {col}"
-                    )
+                log.warning(f"Could not determine the OEField type for column {col}")
+                continue
 
         record_type = oechem.OEMolRecord if primary_molecule_column is not None else oechem.OERecord
 
@@ -1664,6 +1732,8 @@ class OEDataFrameAccessor:
                 record.set_value(index_field, str(idx))
 
             for col in cols:
+                if col not in fields:
+                    continue
                 f = fields[col]
                 v = row[col]
 
