@@ -144,7 +144,14 @@ class Dataset:
         # If we are using on certain columns
         if self.usecols is None or col in self.usecols:
 
-            t = self.TYPES.get(type(val), object) if force_type is None else force_type
+            if force_type is not None:
+                t = force_type
+            elif isinstance(val, oechem.OEMolBase):
+                t = self.TYPES[oechem.OEMolBase]
+            elif isinstance(val, oechem.OEDesignUnit):
+                t = self.TYPES[oechem.OEDesignUnit]
+            else:
+                t = self.TYPES.get(type(val), object)
             is_missing = bool(pd.isna(val)) if not isinstance(val, (oechem.OEMolBase, oechem.OEDesignUnit)) else False
 
             # If this is a new column

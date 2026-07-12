@@ -143,6 +143,17 @@ class TestDataset:
         del dataset["test"]
         assert "test" not in dataset
 
+    def test_add_resolves_molecule_value_to_molecule_dtype(self):
+        ds = Dataset()
+        for smi in ("CCO", "CCC", "CC"):
+            m = oechem.OEGraphMol()
+            oechem.OESmilesToMol(m, smi)
+            ds.add("Reactant", m)
+        assert isinstance(ds["Reactant"].dtype, oepd.MoleculeDtype)
+        series = ds.to_series_dict()["Reactant"]
+        assert isinstance(series.dtype, oepd.MoleculeDtype)
+        assert len(series) == 3
+
 
 class TestSeriestoMoleculeArray:
     """Test _series_to_molecule_array function"""
