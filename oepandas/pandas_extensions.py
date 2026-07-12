@@ -1175,7 +1175,7 @@ def _is_missing(value: object) -> bool:
     :returns: True for None / NaN / NaT, otherwise False.
     """
     try:
-        return bool(pd.isna(value))  # type: ignore[call-overload]
+        return bool(pd.isna(value))
     except (TypeError, ValueError):
         return value is None
 
