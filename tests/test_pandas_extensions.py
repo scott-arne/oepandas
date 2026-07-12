@@ -6,6 +6,7 @@ import csv
 from pathlib import Path
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 
+import numpy as np
 import pandas as pd
 import pytest
 from openeye import oechem
@@ -489,6 +490,23 @@ class TestFileWriters:
             # Must not raise KeyError for the unresolvable "Blank" column.
             df.chem.to_oedb(str(out), primary_molecule_column="Molecule")
             assert out.exists()
+
+    def test_to_oedb_coerces_numpy_scalar_object_columns(self, test_molecules):
+        df = pd.DataFrame({
+            "Molecule": oepd.MoleculeArray(test_molecules),
+            "I": pd.Series([np.int64(1), np.int64(2), np.int64(3), np.int64(4)], dtype=object),
+            "B": pd.Series([np.bool_(True), np.bool_(False), np.bool_(True), np.bool_(False)], dtype=object),
+        })
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "npscalars.oedb"
+            # Must not raise: numpy scalars are coerced to native types before writing.
+            df.chem.to_oedb(str(out), primary_molecule_column="Molecule", index=False)
+            ifs = oechem.oeifstream()
+            assert ifs.open(str(out))
+            rec = next(iter(oechem.OEReadRecords(ifs)))
+            assert rec.get_value(oechem.OEField("I", oechem.Types.Int)) == 1
+            assert rec.get_value(oechem.OEField("B", oechem.Types.Bool)) is True
+            ifs.close()
 
 
 class TestPandasAccessors:

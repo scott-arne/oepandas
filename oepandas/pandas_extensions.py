@@ -1684,10 +1684,12 @@ class OEDataFrameAccessor:
 
         fields = {}
         field_types = {}
+        field_families = {}
         for col in cols:
             family = _resolve_oe_data_type(
                 cast(pd.Series, self._obj[col]), self._obj.dtypes[col], sample_size=sample_size
             )
+            field_families[col] = family
 
             if family == _OE_TYPE_FLOAT:
                 fields[col] = oechem.OEField(col, oechem.Types.Float)
@@ -1737,11 +1739,22 @@ class OEDataFrameAccessor:
                     continue
                 f = fields[col]
                 v = row[col]
+                family = field_families[col]
 
                 record.add_field(f)
 
-                if (not safe) or isinstance(v, field_types[col]):
-                    record.set_value(f, v)
+                if family in _OE_TYPE_COERCERS:
+                    # Scalar families: coerce to a native Python type before set_value.
+                    # OpenEye's set_value rejects numpy scalars (e.g. np.int64, np.bool_).
+                    try:
+                        record.set_value(f, _OE_TYPE_COERCERS[family](v))
+                    except (ValueError, TypeError):
+                        if not safe:
+                            raise
+                else:
+                    # Molecule / design-unit fields: pass the object through unchanged.
+                    if (not safe) or isinstance(v, field_types[col]):
+                        record.set_value(f, v)
 
             oechem.OEWriteRecord(ofs, record)
 
