@@ -1094,6 +1094,7 @@ _INTEGER_TYPES = (
 _BOOLEAN_TYPES = (
     pd.BooleanDtype,
     np.dtypes.BoolDType,
+    np.bool_,
     bool
 )
 

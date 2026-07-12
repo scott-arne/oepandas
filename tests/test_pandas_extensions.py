@@ -12,16 +12,16 @@ from openeye import oechem
 
 import oepandas as oepd
 from oepandas.pandas_extensions import (
-    Column,
-    Dataset,
-    _add_smiles_columns,
-    _is_missing,
     _OE_TYPE_BOOL,
     _OE_TYPE_BYTES,
     _OE_TYPE_FLOAT,
     _OE_TYPE_INT,
     _OE_TYPE_MOLECULE,
     _OE_TYPE_STRING,
+    Column,
+    Dataset,
+    _add_smiles_columns,
+    _is_missing,
     _resolve_oe_data_type,
     _series_to_molecule_array,
     read_molecule_csv,
@@ -286,6 +286,11 @@ class TestResolveOeDataType:
 
     def test_object_column_bool_family(self):
         s = pd.Series([True, False, True], dtype=object)
+        assert _resolve_oe_data_type(s, s.dtype) == _OE_TYPE_BOOL
+
+    def test_object_column_numpy_bool_family(self):
+        import numpy as np
+        s = pd.Series([np.bool_(True), np.bool_(False)], dtype=object)
         assert _resolve_oe_data_type(s, s.dtype) == _OE_TYPE_BOOL
 
     def test_string_family_object_column(self):
