@@ -570,6 +570,25 @@ class TestFileWriters:
             assert records[2].get_value(ifield) == 2
             assert records[3].get_value(ifield) == 3
 
+    def test_to_oedb_skips_float_nan(self, test_molecules):
+        # A float-family object column with a NaN cell: NaN is a valid float but means
+        # missing, so it must be left unset rather than written as a present Float value.
+        df = pd.DataFrame({
+            "Molecule": oepd.MoleculeArray(test_molecules),
+            "F": pd.Series([1.0, float("nan"), 2.0, 3.0], dtype=object),
+        })
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "floatnan.oedb"
+            df.chem.to_oedb(str(out), primary_molecule_column="Molecule", index=False)
+            ifs = oechem.oeifstream()
+            assert ifs.open(str(out))
+            records = list(oechem.OEReadRecords(ifs))
+            ifs.close()
+            ffield = oechem.OEField("F", oechem.Types.Float)
+            assert records[0].has_value(ffield) and records[0].get_value(ffield) == 1.0
+            assert not records[1].has_value(ffield)   # NaN left unset
+            assert records[2].get_value(ffield) == 2.0
+
 
 class TestPandasAccessors:
     """Test pandas series/dataframe accessors"""

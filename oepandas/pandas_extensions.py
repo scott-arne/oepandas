@@ -1774,10 +1774,14 @@ class OEDataFrameAccessor:
                 # Python type before set_value, because OpenEye's set_value rejects
                 # numpy scalars such as np.int64 and np.bool_.
                 if family in _OE_TYPE_COERCERS:
-                    # Scalar families: bool and int are disjoint value families, so a
-                    # bool cell in an int-resolved column is skipped under safe mode
-                    # rather than written as 1. Coerce to a native Python type before
-                    # set_value (OpenEye rejects numpy scalars like np.int64/np.bool_).
+                    # Scalar families: skip missing cells (None/NaN/NA) so they stay
+                    # unset rather than being written (e.g. float NaN is a valid float
+                    # but represents missing data). bool and int are disjoint value
+                    # families, so a bool cell in an int-resolved column is skipped under
+                    # safe mode rather than written as 1. Coerce to a native Python type
+                    # before set_value (OpenEye rejects numpy scalars like np.int64/np.bool_).
+                    if _is_missing(v):
+                        continue
                     if (not safe) or _value_matches_family(v, family):
                         try:
                             record.set_value(f, _OE_TYPE_COERCERS[family](v))
