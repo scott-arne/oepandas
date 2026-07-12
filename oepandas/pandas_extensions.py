@@ -2,7 +2,7 @@ import logging
 import warnings
 from collections.abc import Callable, Hashable, Iterable
 from pathlib import Path
-from typing import Literal, Protocol, TypedDict, cast
+from typing import Any, Literal, Protocol, TypedDict, cast
 
 import numpy as np
 import pandas as pd
@@ -1175,7 +1175,7 @@ def _is_missing(value: object) -> bool:
     :returns: True for None / NaN / NaT, otherwise False.
     """
     try:
-        return bool(pd.isna(value))
+        return bool(pd.isna(cast(Any, value)))
     except (TypeError, ValueError):
         return value is None
 
