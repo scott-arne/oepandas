@@ -155,6 +155,22 @@ class DataFrame(pd.DataFrame):
         **kwargs: Any
     ) -> None: ...
 
+    def to_oeb(
+        self,
+        fp: str | Path,
+        primary_molecule_column: str,
+        *,
+        title_column: str | None = None,
+        columns: str | list[str] | None = None,
+        index: bool = True,
+        index_tag: str = "index",
+        write_generic_data: bool = True,
+        write_sd_data: bool = False,
+        sample_size: int = 25,
+        safe: bool = True,
+        gzip: bool = False,
+    ) -> None: ...
+
     def as_design_unit(
         self,
         columns: str | list[str],
