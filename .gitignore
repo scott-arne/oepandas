@@ -4,9 +4,11 @@
 .vscode
 docs/plans
 docs/superpowers
+docs/hyperpowers
 docs/specs
 .superpowers
 .ipynb_checkpoints
+.gitignore.tmp__
 
 ### Python template
 # Byte-compiled / optimized / DLL files
