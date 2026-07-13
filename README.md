@@ -242,6 +242,14 @@ df.chem.to_oedb(
     "output.oedb",
     primary_molecule_column="Molecule"
 )
+
+# Write to OEB (columns become typed generic data on the molecules)
+df.chem.to_oeb(
+    "output.oeb",
+    primary_molecule_column="Molecule",
+    title_column="Name",
+    columns=["Activity", "MW"]   # attached via mol.SetData with native types
+)
 ```
 
 ---
@@ -593,6 +601,50 @@ df.chem.to_oedb(
 | `primary_molecule_column` | str | `None` | Molecule column (None creates OERecord, not OEMolRecord) |
 | `sample_size` | int | `25` | Sample size for type detection |
 | `safe` | bool | `True` | Type check before writing |
+
+---
+
+#### `to_oeb()`
+
+Write a DataFrame to an OpenEye binary (`.oeb` / `.oeb.gz`) molecule file, attaching data
+columns as typed generic data (`mol.SetData`) and/or SD tags. Molecules are written as
+`OEMol` copies, so conformers are preserved.
+
+```python
+df.chem.to_oeb(
+    fp,
+    primary_molecule_column,
+    *,
+    title_column=None,
+    columns=None,
+    index=True,
+    index_tag="index",
+    write_generic_data=True,
+    write_sd_data=False,
+    sample_size=25,
+    safe=True,
+    gzip=False
+)
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `primary_molecule_column` | str | required | Molecule column to write (must be a MoleculeDtype) |
+| `title_column` | str | `None` | Column used to set molecule titles |
+| `columns` | str \| list | `None` | Data columns to write (default: all non-primary columns) |
+| `index` | bool | `True` | Write the DataFrame index |
+| `index_tag` | str | `"index"` | Tag name for the index |
+| `write_generic_data` | bool | `True` | Write typed generic data via `mol.SetData` |
+| `write_sd_data` | bool | `False` | Additionally write SD-string tags |
+| `sample_size` | int | `25` | Sample size for type detection |
+| `safe` | bool | `True` | Skip cells that cannot be coerced instead of raising |
+| `gzip` | bool | `False` | Gzip the output |
+
+> **Note:** Boolean columns are written as integers (`0`/`1`) because the OEB format
+> does not persist boolean-`False` generic data, so they round-trip as an integer column.
+> OpenEye's OEB *reader* can intermittently drop generic/SD data on load; `read_oeb`
+> detects this and raises rather than returning silently-dropped data (retry, ideally in
+> a fresh process).
 
 ---
 

@@ -1,8 +1,11 @@
+import contextlib
+import gzip
 import logging
+import re
 import warnings
 from collections.abc import Callable, Hashable, Iterable
 from pathlib import Path
-from typing import Literal, Protocol, TypedDict, cast
+from typing import Any, Literal, Protocol, TypedDict, cast
 
 import numpy as np
 import pandas as pd
@@ -144,7 +147,14 @@ class Dataset:
         # If we are using on certain columns
         if self.usecols is None or col in self.usecols:
 
-            t = self.TYPES.get(type(val), object) if force_type is None else force_type
+            if force_type is not None:
+                t = force_type
+            elif isinstance(val, oechem.OEMolBase):
+                t = self.TYPES[oechem.OEMolBase]
+            elif isinstance(val, oechem.OEDesignUnit):
+                t = self.TYPES[oechem.OEDesignUnit]
+            else:
+                t = self.TYPES.get(type(val), object)
             is_missing = bool(pd.isna(val)) if not isinstance(val, (oechem.OEMolBase, oechem.OEDesignUnit)) else False
 
             # If this is a new column
@@ -854,6 +864,47 @@ def read_sdf(
     )
 
 
+# Maximum number of times read_oeb re-reads a file when it detects that generic/SD data
+# present in the file was silently dropped by the OpenEye OEB reader (see
+# _oeb_scan_has_unread_data).
+_OEB_READ_MAX_ATTEMPTS = 3
+
+
+def _oeb_scan_has_unread_data(fp: FilePath, known_texts: Iterable[object]) -> bool:
+    """Heuristically detect generic/SD data tags in a raw OEB file.
+
+    OpenEye's OEB reader intermittently drops generic/SD data during deserialization
+    even though the data is physically present in the file. Generic and SD data tag names
+    (and string values) are stored as printable ASCII in the OEB binary, whereas molecule
+    connection tables are not. This scans the raw bytes for printable runs that are not
+    explained by text the reader already surfaced (e.g. molecule titles); any such run
+    indicates data that should have been read.
+
+    The check is deliberately conservative: it only considers printable runs of four or
+    more characters, so short tag names may be missed. A false negative (missing a drop)
+    is preferable to a false positive (reporting a healthy, data-free file as corrupt).
+
+    :param fp: Path to the OEB file.
+    :param known_texts: Text already surfaced by the reader (e.g. molecule titles) that
+        legitimately appears as ASCII in the file and must not be treated as data.
+    :returns: True if the file contains printable data-tag text beyond ``known_texts``.
+    """
+    try:
+        with open(fp, "rb") as handle:
+            raw = handle.read()
+    except OSError:
+        return False
+
+    # .oeb.gz files gzip-compress the whole stream; decompress so the scan sees tag text.
+    if is_gz(fp):
+        with contextlib.suppress(OSError, EOFError):
+            raw = gzip.decompress(raw)
+
+    runs = {match.decode("ascii", "ignore") for match in re.findall(rb"[ -~]{4,}", raw)}
+    explained = {str(text) for text in known_texts if text is not None and str(text) != ""}
+    return any(run not in explained for run in runs)
+
+
 def read_oeb(
     filepath_or_buffer: FilePath | ReadBuffer[bytes] | ReadBuffer[str],
     *,
@@ -913,23 +964,57 @@ def read_oeb(
     :param no_title: If True, do not include title in the dataframe
     :return: Pandas DataFrame
     """
-    return _read_molecules_to_dataframe(
-        MoleculeArray.read_oeb,
-        filepath_or_buffer,
-        flavor=flavor,
-        molecule_column=molecule_column,
-        title_column=title_column,
-        add_smiles=add_smiles,
-        molecule_columns=molecule_columns,
-        generic_data=read_generic_data,
-        sd_data=read_sd_data,
-        usecols=usecols,
-        numeric_columns=numeric,
-        conformer_test=conformer_test,
-        combine_tags=combine_tags,
-        sd_prefix=sd_prefix,
-        generic_prefix=generic_prefix,
-        no_title=no_title
+    read_data = read_generic_data or read_sd_data
+
+    # Columns that are not tabular data (used to detect a silent generic/SD-data drop).
+    non_data_columns = {molecule_column}
+    if title_column is not None and not no_title:
+        non_data_columns.add(title_column)
+
+    attempts = _OEB_READ_MAX_ATTEMPTS if read_data else 1
+    for _attempt in range(attempts):
+        df = _read_molecules_to_dataframe(
+            MoleculeArray.read_oeb,
+            filepath_or_buffer,
+            flavor=flavor,
+            molecule_column=molecule_column,
+            title_column=title_column,
+            add_smiles=add_smiles,
+            molecule_columns=molecule_columns,
+            generic_data=read_generic_data,
+            sd_data=read_sd_data,
+            usecols=usecols,
+            numeric_columns=numeric,
+            conformer_test=conformer_test,
+            combine_tags=combine_tags,
+            sd_prefix=sd_prefix,
+            generic_prefix=generic_prefix,
+            no_title=no_title
+        )
+
+        # Done if the caller did not request data, or if any data column was produced.
+        if not read_data or any(col not in non_data_columns for col in df.columns):
+            return df
+
+        # No data columns were produced. This only indicates a problem if the file
+        # actually contains data: OpenEye's OEB reader intermittently drops generic/SD
+        # data on deserialization even though it is present on disk. Detect that from the
+        # raw bytes and retry rather than silently returning dropped data.
+        if not isinstance(filepath_or_buffer, (str, Path)):
+            return df
+        titles = (
+            df[title_column].tolist()
+            if title_column is not None and title_column in df.columns
+            else []
+        )
+        if not _oeb_scan_has_unread_data(filepath_or_buffer, titles):
+            return df
+
+    raise FileError(
+        f"read_oeb: '{filepath_or_buffer}' contains generic/SD data tags but none were "
+        f"deserialized after {attempts} attempt(s). This is a known intermittent OpenEye "
+        f"OEB reader defect: the data is present in the file but was dropped on read. "
+        f"Retry the read, ideally in a fresh process."
     )
 
 
@@ -1094,6 +1179,7 @@ _INTEGER_TYPES = (
 _BOOLEAN_TYPES = (
     pd.BooleanDtype,
     np.dtypes.BoolDType,
+    np.bool_,
     bool
 )
 
@@ -1109,6 +1195,112 @@ _BYTES_TYPES = (
     np.dtypes.UByteDType,
     bytes
 )
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Shared type resolution for the typed writers (to_oeb / to_oedb)
+# ----------------------------------------------------------------------------------------------------------------------
+
+# Resolved OpenEye data-type families. Both to_oedb (OEField selection) and to_oeb
+# (native mol.SetData coercion) map a column to one of these families.
+_OE_TYPE_FLOAT = "float"
+_OE_TYPE_INT = "int"
+_OE_TYPE_BOOL = "bool"
+_OE_TYPE_STRING = "string"
+_OE_TYPE_BYTES = "bytes"
+_OE_TYPE_MOLECULE = "molecule"
+_OE_TYPE_DESIGN_UNIT = "design_unit"
+
+# Native Python coercers for the typed generic-data path in to_oeb. mol.SetData rejects
+# numpy scalar types (e.g. np.int64, np.bool_), so cell values must be coerced to a
+# native Python type before being set. Molecule/design-unit families are handled separately.
+_OE_TYPE_COERCERS: dict[str, Callable[..., object]] = {
+    _OE_TYPE_FLOAT: float,
+    _OE_TYPE_INT: int,
+    _OE_TYPE_BOOL: bool,
+    _OE_TYPE_STRING: str,
+    _OE_TYPE_BYTES: bytes,
+}
+
+
+def _value_matches_family(value: object, family: str) -> bool:
+    """Return whether a scalar value natively matches a resolved scalar family.
+
+    Bool and int are treated as disjoint families even though Python's ``bool``
+    subclasses ``int``: a bool value does not match the int family and an int value
+    does not match the bool family.
+
+    :param value: The cell value to test.
+    :param family: One of the scalar ``_OE_TYPE_*`` family constants.
+    :returns: True if ``value`` is a native instance of ``family``.
+    """
+    if family == _OE_TYPE_INT:
+        return isinstance(value, _INTEGER_TYPES) and not isinstance(value, _BOOLEAN_TYPES)
+    if family == _OE_TYPE_BOOL:
+        return isinstance(value, _BOOLEAN_TYPES)
+    if family == _OE_TYPE_FLOAT:
+        return isinstance(value, _FLOAT_TYPES)
+    if family == _OE_TYPE_STRING:
+        return isinstance(value, _STRING_TYPES)
+    if family == _OE_TYPE_BYTES:
+        return isinstance(value, _BYTES_TYPES)
+    return False
+
+
+def _is_missing(value: object) -> bool:
+    """Return whether a scalar cell value is missing.
+
+    :param value: A scalar cell value (molecule columns are handled separately).
+    :returns: True for None / NaN / NaT, otherwise False.
+    """
+    try:
+        return bool(pd.isna(cast(Any, value)))
+    except (TypeError, ValueError):
+        return value is None
+
+
+def _resolve_oe_data_type(series: pd.Series, dtype: object, *, sample_size: int = 25) -> str | None:
+    """Resolve a DataFrame column to a shared OpenEye data-type family.
+
+    The families are consumed by :meth:`OEDataFrameAccessor.to_oedb` (to select an
+    ``OEField`` type) and :meth:`OEDataFrameAccessor.to_oeb` (to select a native
+    coercion for ``mol.SetData``). For columns without a recognized extension/numpy
+    dtype, the type is inferred by sampling with :func:`predominant_type`.
+
+    :param series: Column values, sampled only when ``dtype`` is not directly recognized.
+    :param dtype: The column's pandas dtype.
+    :param sample_size: Maximum rows sampled by :func:`predominant_type`.
+    :returns: One of the ``_OE_TYPE_*`` family constants, or None if it cannot be determined.
+    """
+    if isinstance(dtype, _FLOAT_TYPES):
+        return _OE_TYPE_FLOAT
+    if isinstance(dtype, _INTEGER_TYPES):
+        return _OE_TYPE_INT
+    if isinstance(dtype, _BOOLEAN_TYPES):
+        return _OE_TYPE_BOOL
+    if isinstance(dtype, MoleculeDtype):
+        return _OE_TYPE_MOLECULE
+    if isinstance(dtype, DesignUnitDtype):
+        return _OE_TYPE_DESIGN_UNIT
+
+    resolved = predominant_type(series, sample_size)
+    if resolved is None:
+        return None
+    # Check bool before int: bool is a subclass of int in Python.
+    if issubclass(resolved, _BOOLEAN_TYPES):
+        return _OE_TYPE_BOOL
+    if issubclass(resolved, _INTEGER_TYPES):
+        return _OE_TYPE_INT
+    if issubclass(resolved, _FLOAT_TYPES):
+        return _OE_TYPE_FLOAT
+    if issubclass(resolved, _STRING_TYPES):
+        return _OE_TYPE_STRING
+    if issubclass(resolved, _BYTES_TYPES):
+        return _OE_TYPE_BYTES
+    if issubclass(resolved, oechem.OEMolBase):
+        return _OE_TYPE_MOLECULE
+    if issubclass(resolved, oechem.OEDesignUnit):
+        return _OE_TYPE_DESIGN_UNIT
+    return None
 
 
 @_register_dataframe_accessor("chem")
@@ -1601,49 +1793,37 @@ class OEDataFrameAccessor:
 
         fields = {}
         field_types = {}
+        field_families = {}
         for col in cols:
-            if isinstance(self._obj.dtypes[col], _FLOAT_TYPES):
+            family = _resolve_oe_data_type(
+                cast(pd.Series, self._obj[col]), self._obj.dtypes[col], sample_size=sample_size
+            )
+            field_families[col] = family
+
+            if family == _OE_TYPE_FLOAT:
                 fields[col] = oechem.OEField(col, oechem.Types.Float)
                 field_types[col] = _FLOAT_TYPES
-
-            elif isinstance(self._obj.dtypes[col], _INTEGER_TYPES):
+            elif family == _OE_TYPE_INT:
                 fields[col] = oechem.OEField(col, oechem.Types.Int)
                 field_types[col] = _INTEGER_TYPES
-
-            elif isinstance(self._obj.dtypes[col], _BOOLEAN_TYPES):
+            elif family == _OE_TYPE_BOOL:
                 fields[col] = oechem.OEField(col, oechem.Types.Bool)
                 field_types[col] = _BOOLEAN_TYPES
-
-            elif isinstance(self._obj.dtypes[col], MoleculeDtype):
+            elif family == _OE_TYPE_STRING:
+                fields[col] = oechem.OEField(col, oechem.Types.String)
+                field_types[col] = _STRING_TYPES
+            elif family == _OE_TYPE_BYTES:
+                fields[col] = oechem.OEField(col, oechem.Types.Blob)
+                field_types[col] = _BYTES_TYPES
+            elif family == _OE_TYPE_MOLECULE:
                 fields[col] = oechem.OEField(col, oechem.Types.Chem.Mol)
                 field_types[col] = oechem.OEMolBase
-
+            elif family == _OE_TYPE_DESIGN_UNIT:
+                fields[col] = oechem.OEField(col, oechem.Types.Chem.DesignUnit)
+                field_types[col] = oechem.OEDesignUnit
             else:
-                series = cast(pd.Series, self._obj[col])
-                t = predominant_type(series, sample_size)
-
-                if t is None:
-                    log.warning(f"Could not determine predominant type for column {col}")
-                    continue
-
-                resolved_t: type = t
-
-                if issubclass(resolved_t, _STRING_TYPES):
-                    fields[col] = oechem.OEField(col, oechem.Types.String)
-                    field_types[col] = _STRING_TYPES
-
-                elif issubclass(resolved_t, _BYTES_TYPES):
-                    fields[col] = oechem.OEField(col, oechem.Types.Blob)
-                    field_types[col] = _BYTES_TYPES
-
-                elif issubclass(resolved_t, oechem.OEDesignUnit):
-                    fields[col] = oechem.OEField(col, oechem.Types.Chem.DesignUnit)
-                    field_types[col] = oechem.OEDesignUnit
-
-                else:
-                    log.warning(
-                        f"Do not know the OEField type that maps to dtype {resolved_t.__name__} in column {col}"
-                    )
+                log.warning(f"Could not determine the OEField type for column {col}")
+                continue
 
         record_type = oechem.OEMolRecord if primary_molecule_column is not None else oechem.OERecord
 
@@ -1664,17 +1844,225 @@ class OEDataFrameAccessor:
                 record.set_value(index_field, str(idx))
 
             for col in cols:
+                if col not in fields:
+                    continue
                 f = fields[col]
                 v = row[col]
+                family = field_families[col]
 
                 record.add_field(f)
 
-                if (not safe) or isinstance(v, field_types[col]):
-                    record.set_value(f, v)
+                # Preserve to_oedb's original safe semantics: in safe mode, only write
+                # cells that are already instances of the resolved field type; skip
+                # mismatches (including None/NaN and type-incompatible values). For
+                # scalar families, coerce the (already type-matching) value to a native
+                # Python type before set_value, because OpenEye's set_value rejects
+                # numpy scalars such as np.int64 and np.bool_.
+                if family in _OE_TYPE_COERCERS:
+                    # Scalar families: skip missing cells (None/NaN/NA) so they stay
+                    # unset rather than being written (e.g. float NaN is a valid float
+                    # but represents missing data). bool and int are disjoint value
+                    # families, so a bool cell in an int-resolved column is skipped under
+                    # safe mode rather than written as 1. Coerce to a native Python type
+                    # before set_value (OpenEye rejects numpy scalars like np.int64/np.bool_).
+                    if _is_missing(v):
+                        continue
+                    if (not safe) or _value_matches_family(v, family):
+                        try:
+                            record.set_value(f, _OE_TYPE_COERCERS[family](v))
+                        except (ValueError, TypeError):
+                            if not safe:
+                                raise
+                else:
+                    # Molecule / design-unit fields.
+                    if (not safe) or isinstance(v, field_types[col]):
+                        record.set_value(f, v)
 
             oechem.OEWriteRecord(ofs, record)
 
         ofs.close()
+
+    def to_oeb(
+            self,
+            fp: FilePath,
+            primary_molecule_column: str,
+            *,
+            title_column: str | None = None,
+            columns: str | Iterable[str] | None = None,
+            index: bool = True,
+            index_tag: str = "index",
+            write_generic_data: bool = True,
+            write_sd_data: bool = False,
+            sample_size: int = 25,
+            safe: bool = True,
+            gzip: bool = False
+    ) -> None:
+        """
+        Write a DataFrame to an OpenEye binary (``.oeb`` / ``.oeb.gz``) molecule file.
+
+        Data columns are attached to each molecule as typed generic data via
+        ``mol.SetData`` (the default) and/or as SD-string tags. Each row is written as an
+        ``OEMol`` copy so conformers are preserved and generic data lands on the parent
+        molecule, where :func:`read_oeb` reads it back.
+
+        :param fp: Output file path (``.oeb.gz`` or ``gzip=True`` gzips the output).
+        :param primary_molecule_column: Molecule column to write (must be a MoleculeDtype).
+        :param title_column: Optional column used to set each molecule's title.
+        :param columns: Data column(s) to write. Default: all columns except the primary
+            molecule column.
+        :param index: Write the DataFrame index.
+        :param index_tag: Tag name for the index (written as a string, following the same
+            generic/SD flags as data columns).
+        :param write_generic_data: Write data columns as typed generic data (default).
+        :param write_sd_data: Additionally write data columns as SD-string tags.
+        :param sample_size: Sample size for type detection on object columns.
+        :param safe: If True, cells that cannot be coerced to the resolved type are
+            skipped with a debug log; if False, the coercion error propagates.
+        :param gzip: Force gzip output.
+        :raises KeyError: If the primary molecule column, title column, or a requested
+            data column is not in the DataFrame.
+        :raises TypeError: If the primary molecule column is not a MoleculeDtype.
+        :raises ValueError: If index is True and index_tag collides with a data column.
+        """
+        if primary_molecule_column not in self._obj.columns:
+            raise KeyError(f'Primary molecule column {primary_molecule_column} not found in DataFrame')
+        if not isinstance(self._obj[primary_molecule_column].dtype, MoleculeDtype):
+            raise TypeError(f'Primary molecule column {primary_molecule_column} is not a MoleculeDtype')
+        if title_column is not None and title_column not in self._obj.columns:
+            raise KeyError(f'Title column {title_column} not found in DataFrame')
+
+        if columns is None:
+            selected = [col for col in self._obj.columns if col != primary_molecule_column]
+        else:
+            requested = [columns] if isinstance(columns, str) else list(columns)
+            for col in requested:
+                if col not in self._obj.columns:
+                    raise KeyError(f'Column {col} not found in DataFrame')
+            selected = [col for col in requested if col != primary_molecule_column]
+
+        if index and index_tag in selected:
+            raise ValueError(f'index_tag {index_tag!r} collides with a data column of the same name')
+
+        write_data = write_generic_data or write_sd_data
+        if not write_data:
+            log.warning("Neither write_generic_data nor write_sd_data is set; no tabular data will be written")
+
+        fp_path = Path(fp)
+
+        # Classify data columns once (only needed when writing data). Routing per spec §5:
+        #   - molecule_cols:  MoleculeDtype columns, or object columns whose predominant
+        #     type is a molecule -> written as native molecule generic data (never SD).
+        #   - designunit_cols: skipped in both paths (design units belong in .oedu/.oedb).
+        #   - generic_families: scalar columns with a resolved coercer family.
+        #   - a scalar-ish object column with no resolvable family gets no generic coercer
+        #     but is still SD-writable as str(v).
+        molecule_cols: set[Hashable] = set()
+        designunit_cols: set[Hashable] = set()
+        generic_families: dict[Hashable, str] = {}
+        if write_data:
+            for col in selected:
+                dtype = self._obj.dtypes[col]
+                if isinstance(dtype, MoleculeDtype):
+                    molecule_cols.add(col)
+                    continue
+                if isinstance(dtype, DesignUnitDtype):
+                    designunit_cols.add(col)
+                    log.warning(f"Design unit column {col} cannot be written to an OEB file; skipping")
+                    continue
+                family = _resolve_oe_data_type(
+                    cast(pd.Series, self._obj[col]), dtype, sample_size=sample_size
+                )
+                if family == _OE_TYPE_MOLECULE:
+                    molecule_cols.add(col)
+                elif family == _OE_TYPE_DESIGN_UNIT:
+                    designunit_cols.add(col)
+                    log.warning(f"Design unit column {col} cannot be written to an OEB file; skipping")
+                elif family is None:
+                    log.warning(
+                        f"Could not determine a generic type for column {col}; "
+                        f"it will not be written as generic data"
+                    )
+                else:
+                    generic_families[col] = family
+
+        warned_sd_molecule = False
+
+        with oechem.oemolostream(str(fp_path)) as ofs:
+            ofs.SetFormat(oechem.OEFormat_OEB)
+            ofs.Setgz(gzip or is_gz(fp_path))
+
+            for idx, row in self._obj.iterrows():
+                source = row[primary_molecule_column]
+
+                # OEMol copy preserves conformers and keeps generic data on the parent
+                # molecule (where read_oeb reads it); the source is never mutated.
+                if isinstance(source, oechem.OEMolBase):
+                    mol = oechem.OEMol(source)
+                else:
+                    log.warning("Row %s has no primary molecule; writing an empty molecule", idx)
+                    mol = oechem.OEMol()
+
+                if title_column is not None:
+                    mol.SetTitle(str(row[title_column]))
+
+                # SD data is conformer-level: set it on the active conformer so it
+                # survives the OEB round-trip (read_oeb reads SD from the active
+                # conformer). Generic data goes on the parent molecule. An OEMol always
+                # has an active conformer (even an empty one), so GetActive is safe here.
+                active = mol.GetActive()
+
+                if index:
+                    if write_generic_data:
+                        mol.SetData(index_tag, str(idx))
+                    if write_sd_data:
+                        oechem.OESetSDData(active, index_tag, str(idx))
+
+                if write_data:
+                    for col in selected:
+                        if col in designunit_cols:
+                            continue  # design units are skipped in both paths
+
+                        v = row[col]
+
+                        if col in molecule_cols:
+                            # Native molecules live only in the generic path; SD cannot hold them.
+                            if write_generic_data:
+                                if isinstance(v, oechem.OEMolBase):
+                                    mol.SetData(col, v)
+                            elif write_sd_data and not warned_sd_molecule:
+                                log.warning(
+                                    "Molecule column(s) are skipped in SD-only mode (write_generic_data=False)"
+                                )
+                                warned_sd_molecule = True
+                            continue
+
+                        if _is_missing(v):
+                            continue
+
+                        # Generic path: coerce to a native Python type before SetData.
+                        # In safe mode only write values that natively match the resolved
+                        # family (bool and int are disjoint); coercion also normalizes
+                        # numpy scalars that OpenEye's SetData would otherwise reject.
+                        if write_generic_data and col in generic_families:
+                            family = generic_families[col]
+                            if (not safe) or _value_matches_family(v, family):
+                                try:
+                                    # OEB does not persist boolean-False generic data, so
+                                    # booleans are stored as ints (0/1) and round-trip as an
+                                    # integer column.
+                                    native = int(v) if family == _OE_TYPE_BOOL else _OE_TYPE_COERCERS[family](v)
+                                    mol.SetData(col, native)
+                                except (ValueError, TypeError) as exc:
+                                    if not safe:
+                                        raise
+                                    log.debug("Skipping column %s for row %s: %s", col, idx, exc)
+
+                        # SD path: always the string form, independent of generic
+                        # coercion, and written to the active conformer.
+                        if write_sd_data:
+                            oechem.OESetSDData(active, col, str(v))
+
+                oechem.OEWriteMolecule(ofs, mol)
 
     # ------------------------------------------------------------------------------------------------------------------
     # Design Unit methods
