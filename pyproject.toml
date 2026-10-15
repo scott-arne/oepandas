@@ -90,6 +90,19 @@ version = {attr = "oepandas.__version__"}
 # https://packaging.python.org/discussions/install-requires-vs-requirements/
 dependencies = {file = ["requirements.txt"]}
 
+[tool.uv]
+# uv rebuilds a local package's metadata only when one of these changes. Its
+# default list holds pyproject.toml, setup.py and setup.cfg, so a pull that
+# changed only the version in oepandas/__init__.py or a pin in requirements.txt
+# left uv on the old version and dependencies.
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "setup.py" },
+    { file = "requirements.txt" },
+    { file = "oepandas/__init__.py" },
+    { git = { commit = true } },
+]
+
 
 [tool.pytest.ini_options]
 filterwarnings = [
